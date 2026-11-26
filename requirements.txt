@@ -1,0 +1,5 @@
+# On Maxwell, numpy / scipy / h5py / pyyaml / extra_data / PyQt5 come from `module load exfel exfel-python`
+# (venv created with --system-site-packages). Only pyqtgraph has to be pip-installed.
+pyqtgraph>=0.13
+# Elsewhere (laptop, no exfel module) also install:
+#   numpy scipy pyyaml PyQt5      (extra_data only needed to read real scans)

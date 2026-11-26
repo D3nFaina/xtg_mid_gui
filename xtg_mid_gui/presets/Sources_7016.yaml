@@ -1,0 +1,167 @@
+# Proposal 7016 (previous XTG beamtime at MID), as in Den's rocking_MID.ipynb.
+# Loaded when the GUI's proposal is set to 7016.  A copy named Sources_7016.yaml in the
+# folder you start the GUI from (e.g. the proposal usr/ folder) takes precedence.
+#
+# * AGIPD1M: 16 tiles, source pattern with {tile}.  "agipd" = all tiles (mean per scan),
+#   "agipd_sub" = the tiles you analyse (per-train images, ROIs).  Frames are averaged per train.
+# * Spectrometers: data.adc[frame, px0:px1], i.e. the notebook's np.s_[a, b:c]:
+#   a = Gotthard frame index within the train (HIREX 20, DES 1), b:c = pixel window.
+#   Each spectrum gets an edge-baseline subtraction (n_edge px per side), then the sum
+#   over the window = pump (HIREX) / probe (DES) intensity.
+# * XGM: data.intensityTD element 0 (pump + probe together).
+# * No delay motor: type the delay of each run in the scan table.
+proposal: 7016
+data: all
+detectors:
+  agipd:
+    label: AGIPD1M (all tiles)
+    data:
+      source: MID_DET_AGIPD1M-1/CORR/{tile}CH0:output
+      key: image.data
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    shape:
+    - 512
+    - 128
+    kind: agipd_overview
+    tiles:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    - 14
+    - 15
+  agipd_sub:
+    label: AGIPD selected tiles
+    data:
+      source: MID_DET_AGIPD1M-1/CORR/{tile}CH0:output
+      key: image.data
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    shape:
+    - 512
+    - 128
+    kind: agipd_tiles
+    tiles:
+    - 8
+    - 10
+    - 15
+pump:
+  source: ''
+  key: data.intensity
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+probe:
+  source: ''
+  key: data.intensity
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+delay:
+  source: ''
+  key: actualPosition
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+spec_enabled: true
+spectrometers:
+  hirex:
+    label: HIREX (pump)
+    data:
+      source: SA2_XTD6_HIREX/CORR/GOTTHARD_RECEIVER:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    frame: 20
+    px:
+    - 1750
+    - 2250
+    n_edge: 50
+    eV0: null
+    dE: null
+  des:
+    label: DES (probe)
+    data:
+      source: MID_EXP_DES/DET/GOTTHARD_RECEIVER:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    frame: 1
+    px:
+    - 1100
+    - 1250
+    n_edge: 50
+    eV0: null
+    dE: null
+crl_enabled: false
+crl_pump_x:
+  source: ''
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_pump_y:
+  source: ''
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_probe_x:
+  source: ''
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_probe_y:
+  source: ''
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+max_trains: 0
+preset: '7016'
+intensity_from: spectrometers
+pump_spec: hirex
+probe_spec: des
+xgm:
+  source: SA2_XTD1_XGM/XGM/DOOCS:output
+  key: data.intensityTD
+  pulses: 0:1
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+overview_trains: 200
+
+# parameter scanned inside a run or across runs (Param scan page; switch it on there)
+param_enabled: false
+param_label: phi, sample rotation
+param_unit: deg
+param:
+  source: MID_EXP_UPP/MDL/DATA_SELECTOR_1
+  key: midExpUppMotorT3.actualPosition

@@ -1,0 +1,112 @@
+proposal: 0
+data: proc
+detectors:
+  jf1:
+    label: Jungfrau 1
+    data:
+      source: PLACEHOLDER_MID_EXP_JF1/CORR/JNGFR01:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    shape:
+    - 100
+    - 160
+  jf2:
+    label: Jungfrau 2
+    data:
+      source: PLACEHOLDER_MID_EXP_JF2/CORR/JNGFR02:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    shape:
+    - 100
+    - 160
+pump:
+  source: PLACEHOLDER_MID_EXP_SDL/DIODE/PUMP:output
+  key: data.intensity
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+probe:
+  source: PLACEHOLDER_MID_EXP_SDL/DIODE/PROBE:output
+  key: data.intensity
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+delay:
+  source: PLACEHOLDER_MID_EXP_SDL/MDL/DELAY
+  key: actualPosition.value
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+spec_enabled: true
+spectrometers:
+  spec1:
+    label: Upstream spectrometer 1
+    data:
+      source: PLACEHOLDER_SA2_XTD_SPEC1/CORR/RECEIVER:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    frame: -1
+    px:
+    - 0
+    - 400
+    n_edge: 20
+    eV0: null
+    dE: null
+  spec2:
+    label: Upstream spectrometer 2
+    data:
+      source: PLACEHOLDER_SA2_XTD_SPEC2/CORR/RECEIVER:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    frame: -1
+    px:
+    - 0
+    - 400
+    n_edge: 20
+    eV0: null
+    dE: null
+crl_enabled: true
+crl_pump_x:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PUMP:output
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_pump_y:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PUMP:output
+  key: data.y
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_probe_x:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PROBE:output
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_probe_y:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PROBE:output
+  key: data.y
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+max_trains: 0
