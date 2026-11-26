@@ -19,6 +19,7 @@ import numpy as np
 from . import agipd
 from .analysis import photonize, spectrum_integral
 from .config import SourceConfig, Source, mask_key_for
+from . import maskstore
 from .reduce import ImageReducer, reduce_images
 
 
@@ -274,8 +275,14 @@ def reduce_pulses(a: np.ndarray, src: Source, image_ndim: int = 0) -> np.ndarray
     if src.pulses != "all":
         lo, _, hi = src.pulses.partition(":")
         a = a[:, slice(int(lo) if lo else None, int(hi) if hi else None)]
-    f = np.nansum if src.reduce == "sum" else np.nanmean
-    out = f(a, axis=1)
+    if a.dtype.kind == "f":               # nan-sum / nan-mean without the copies np.nanmean makes
+        fin = ~np.isnan(a)
+        out = np.sum(a, axis=1, where=fin, dtype=np.float64 if not image_ndim else a.dtype)
+        if src.reduce != "sum":
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out = out / fin.sum(axis=1)
+    else:
+        out = a.sum(axis=1) if src.reduce == "sum" else a.mean(axis=1)
     return out.astype(np.float32 if image_ndim else np.float64) * src.scale + src.offset
 
 
@@ -326,12 +333,31 @@ class ExtraDataBackend(Backend):
             run = run.select_trains(ex.by_index[: cfg.max_trains])
 
         masks = {}                     # name -> [mask key, masked values, all values] or a message
+        fixed_masks = {}               # (source, mask key, roi) -> bad pixels read once (mask_per_train off)
 
         def masked(name, kd, a, source, data_key, mask_key, roi=None):
             """a (float, read from kd = run[source, data_key]) with NaN where the bad-pixel
             mask next to it (mask_key, "auto" = <group>.mask) is > 0."""
             mk = mask_key_for(data_key, mask_key) if cfg.apply_mask else ""
             if not mk:
+                return a
+            fixed = not getattr(cfg, "mask_per_train", False)
+            fkey = (source, mk, None if roi is None else repr(roi))
+            if fixed and fkey not in fixed_masks:
+                stored = maskstore.load(cfg.proposal, fkey)           # read once for the experiment
+                if stored is not None and stored.shape == a.shape[1:]:
+                    fixed_masks[fkey] = stored
+                    masks[name] = [f"{mk} (from {maskstore.path_for(cfg.proposal).name})", 0, 0]
+            if fixed and fkey in fixed_masks:
+                m0 = fixed_masks[fkey]
+                if m0 is None or m0.shape != a.shape[1:]:
+                    return a
+                a = np.asarray(a, np.float32 if a.dtype != np.float64 else np.float64)
+                a[:, m0] = np.nan
+                info = masks.get(name)
+                if isinstance(info, list):
+                    info[1] += int(m0.sum()) * len(a)
+                    info[2] += a.size
                 return a
             try:
                 mkd = run[source, mk]
@@ -344,7 +370,14 @@ class ExtraDataBackend(Backend):
             m = (mkd.ndarray() if roi is None else mkd.ndarray(roi=roi)) > 0
             if m.shape != a.shape:
                 masks[name] = f"{mk} has shape {m.shape}, data {a.shape}: not masked"
+                if fixed:
+                    fixed_masks[fkey] = None
                 return a
+            if fixed:                                                 # bad in most frames = bad pixel
+                m0 = m.mean(axis=0) > 0.5
+                fixed_masks[fkey] = m0
+                maskstore.save(cfg.proposal, fkey, m0)
+                m = np.broadcast_to(m0, m.shape)
             info = masks.get(name)
             info = info if isinstance(info, list) else [mk, 0, 0]
             info[1] += int(m.sum())

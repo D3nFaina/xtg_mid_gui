@@ -315,3 +315,21 @@ def test_extra_data_photonize_off_keeps_keV(monkeypatch):
                        pump=Source("PUMP", "v"), probe=Source("PROBE", "v"), delay=Source("", ""))
     d = ExtraDataBackend(cfg).load_scan(1)
     assert np.isnan(d.photon_energy) and np.allclose(d.images["jf1"][:, 0, 0], (9.2 + 17.5) / 2)
+
+
+def test_mask_read_once_for_the_experiment(monkeypatch):
+    from xtg_mid_gui import maskstore
+    run = _masked_fake_run()
+    fake = types.SimpleNamespace(open_run=lambda prop, r, data="proc": run, by_index=_ByIndex(), by_id=_ById())
+    monkeypatch.setitem(sys.modules, "extra_data", fake)
+    cfg = config_for("7016")
+    d1 = ExtraDataBackend(cfg).load_scan(42)
+    assert maskstore.path_for(cfg.proposal).exists()
+    for k in [k for k in run.keys if k[1].endswith(".mask")]:      # masks gone from the "data"
+        del run.keys[k]
+    d2 = ExtraDataBackend(cfg).load_scan(43)
+    assert np.isnan(d2.images["agipd_sub"][:, 0, 0]).all() and np.allclose(d2.pump, d1.pump)
+    assert any("masks_7016.npz" in str(v) for v in d2.masks.values())
+    cfg.mask_per_train = True                                       # every frame: reads the (now missing) mask
+    d3 = ExtraDataBackend(cfg).load_scan(44)
+    assert np.allclose(d3.pump, 100, atol=1)

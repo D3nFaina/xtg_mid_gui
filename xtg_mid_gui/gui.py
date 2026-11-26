@@ -396,6 +396,19 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                                 "Changing it reads the loaded scans again.")
         self.cb_mask.toggled.connect(self._mask_toggled)
         c.body.addWidget(self.cb_mask)
+        self.cb_mask_pt = QtWidgets.QCheckBox("mask every frame (slower)")
+        self.cb_mask_pt.setChecked(bool(getattr(self.cfg, "mask_per_train", False)))
+        self.cb_mask_pt.setToolTip("Off (fast): the mask is read once per run, from its first trains, and a pixel\n"
+                                   "flagged in more than half of those frames is left out everywhere.\n"
+                                   "On: the mask of every frame is read and applied (about twice the reading time).\n"
+                                   "Changing it reads the loaded scans again.")
+        self.cb_mask_pt.toggled.connect(self._mask_pt_toggled)
+        c.body.addWidget(self.cb_mask_pt)
+        b_mask = QtWidgets.QPushButton("read the bad-pixel masks again")
+        b_mask.setToolTip("The masks are read once for the experiment and kept in masks_<proposal>.npz in\n"
+                          "the start folder. This deletes that file and reads the loaded scans again.")
+        b_mask.clicked.connect(self._mask_reread)
+        c.body.addWidget(b_mask)
         self.cb_phot = QtWidgets.QCheckBox("photonize Jungfraus")
         self.cb_phot.setChecked(bool(getattr(self.cfg, "photonize", False)))
         self.cb_phot.setToolTip("Per frame, before averaging: values < 0 -> NaN, the others -> round(value / photon energy),\n"
@@ -799,6 +812,19 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def _mask_toggled(self, on):
         self.cfg.apply_mask = bool(on)
         self.log(f"bad-pixel masks {'on' if on else 'off'}")
+        if self.scans:
+            self.reload_scans()
+
+    def _mask_reread(self):
+        from . import maskstore
+        maskstore.clear(self.cfg.proposal)
+        self.log(f"{maskstore.path_for(self.cfg.proposal).name} deleted: bad-pixel masks are read again")
+        if self.scans:
+            self.reload_scans()
+
+    def _mask_pt_toggled(self, on):
+        self.cfg.mask_per_train = bool(on)
+        self.log(f"bad-pixel mask {'of every frame' if on else 'read once per run'}")
         if self.scans:
             self.reload_scans()
 
