@@ -122,6 +122,10 @@ class SourceConfig:
     # --- bad-pixel masks of the detectors and spectrometers (see Detector.mask_key):
     #     masked pixels (mask > 0) are set to NaN and left out of every sum / mean
     apply_mask: bool = True
+    #     mask_per_train False (fast): the mask is read once, from the first trains of each
+    #     run, and a pixel is bad if flagged in more than half of those frames; True reads
+    #     the mask of every frame (as stored; about twice the reading time)
+    mask_per_train: bool = False
     # --- photonize the Jungfraus (detectors of kind "image"; corrected data in keV):
     #     per frame, before the memory-cell / train average: values < 0 -> NaN,
     #     others -> round(value / photon energy), i.e. photon counts

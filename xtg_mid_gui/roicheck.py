@@ -80,8 +80,20 @@ class RoiPositionWindow(QtWidgets.QWidget):
         if key not in self._cache:
             if len(self._cache) > 500:
                 self._cache.clear()
-            imgs = m.scans[s].images[det][m.keep[s]]
-            if per == "run":
+            d = m.scans[s]
+            if det in d.stats:                    # not the reference run: positions kept at load time
+                if per == "run":
+                    imgs = d.stats[det].mean[None]
+                else:
+                    xy = d.stats[det].position(roi.geometry(), mode, bkg)
+                    if xy is None:
+                        m._stale.add(s)
+                        return np.full(int(m.keep[s].sum()), np.nan), np.full(int(m.keep[s].sum()), np.nan)
+                    self._cache[key] = (xy[0][m.keep[s]], xy[1][m.keep[s]])
+                    return self._cache[key]
+            else:
+                imgs = d.images[det][m.keep[s]]
+            if per == "run" and det not in d.stats:
                 with np.errstate(invalid="ignore"):
                     imgs = np.nanmean(imgs, axis=0)[None] if len(imgs) else imgs
             lvl = an.roi_bkg_level(imgs, bkg) if bkg else None
