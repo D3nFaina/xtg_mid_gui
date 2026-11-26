@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import agipd
-from .analysis import spectrum_integral
-from .config import SourceConfig, Source
+from .analysis import photonize, spectrum_integral
+from .config import SourceConfig, Source, mask_key_for
 
 
 @dataclass
@@ -36,6 +36,9 @@ class ScanData:
     param: np.ndarray | None = None                # (n,) parameter scanned inside the run, None if not read
     delay_data: float = np.nan                     # delay as read from the data (before the delays file)
     delay_from: str = "data"                       # "data", "file" (delays_<proposal>.csv) or "typed"
+    masks: dict = field(default_factory=dict)      # name -> what the bad-pixel mask did (for the log)
+    photon_energy: float = np.nan                  # keV used to photonize the Jungfraus, NaN = not photonized
+    notes: list = field(default_factory=list)      # other messages for the log
     _mean: dict = field(default_factory=dict, repr=False)
 
     @property
@@ -268,9 +271,13 @@ def per_train_mean(tids, arr):
         return tids[o], np.asarray(arr)[o]
     arr = np.asarray(arr)
     out = np.zeros((len(u),) + arr.shape[1:], np.float64)
-    np.add.at(out, inv, np.nan_to_num(arr))
-    cnt = np.bincount(inv, minlength=len(u)).reshape((-1,) + (1,) * (arr.ndim - 1))
-    return u, (out / cnt).astype(arr.dtype if arr.dtype.kind == "f" else np.float64)
+    cnt = np.zeros((len(u),) + arr.shape[1:], np.int64)
+    fin = np.isfinite(arr)
+    np.add.at(out, inv, np.where(fin, arr, 0))        # nan-mean: NaN (masked) entries do not count
+    np.add.at(cnt, inv, fin)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.where(cnt > 0, out / cnt, np.nan)
+    return u, mean.astype(arr.dtype if arr.dtype.kind == "f" else np.float64)
 
 
 class ExtraDataBackend(Backend):
@@ -297,6 +304,35 @@ class ExtraDataBackend(Backend):
         if cfg.max_trains:
             run = run.select_trains(ex.by_index[: cfg.max_trains])
 
+        masks = {}                     # name -> [mask key, masked values, all values] or a message
+
+        def masked(name, kd, a, source, data_key, mask_key, roi=None):
+            """a (float, read from kd = run[source, data_key]) with NaN where the bad-pixel
+            mask next to it (mask_key, "auto" = <group>.mask) is > 0."""
+            mk = mask_key_for(data_key, mask_key) if cfg.apply_mask else ""
+            if not mk:
+                return a
+            try:
+                mkd = run[source, mk]
+            except Exception:
+                masks.setdefault(name, f"no {mk} in the run: not masked")
+                return a
+            tids, mtids = np.asarray(kd.train_id_coordinates()), np.asarray(mkd.train_id_coordinates())
+            if mtids.shape != tids.shape or np.any(mtids != tids):      # kd is a chunk / selection
+                mkd = mkd.select_trains(ex.by_id[np.unique(tids).tolist()])
+            m = (mkd.ndarray() if roi is None else mkd.ndarray(roi=roi)) > 0
+            if m.shape != a.shape:
+                masks[name] = f"{mk} has shape {m.shape}, data {a.shape}: not masked"
+                return a
+            info = masks.get(name)
+            info = info if isinstance(info, list) else [mk, 0, 0]
+            info[1] += int(m.sum())
+            info[2] += m.size
+            masks[name] = info
+            a = np.asarray(a, np.float32 if a.dtype != np.float64 else np.float64)
+            a[m] = np.nan
+            return a
+
         def read(src: Source, image_ndim=0, optional=False):
             if not src.source:
                 return None
@@ -309,16 +345,64 @@ class ExtraDataBackend(Backend):
             a = reduce_pulses(kd.ndarray(), src, image_ndim)
             return per_train_mean(kd.train_id_coordinates(), a)      # one value per train
 
-        def read_tile(src: Source, tile: int, trains=None):
+        def read_tile(src: Source, tile: int, trains=None, name="", mask_key=""):
             """(trainIds, (n, 512, 128)) frames of one AGIPD tile averaged per train."""
-            kd = run[src.source.format(tile=tile), src.key]
+            source = src.source.format(tile=tile)
+            kd = run[source, src.key]
             if trains:
                 kd = kd.select_trains(ex.by_index[:trains])
             parts_t, parts_a = [], []
             chunks = kd.split_trains(trains_per_part=32) if hasattr(kd, "split_trains") else [kd]
             for ch in chunks:                                     # chunks keep the memory low
                 a = np.asarray(ch.ndarray(), np.float32)
+                a = masked(f"{name} tile {tile}", ch, a, source, src.key, mask_key)
                 a = a.reshape(-1, *a.shape[-2:])
+                t, m = per_train_mean(ch.train_id_coordinates(), a)
+                parts_t.append(t)
+                parts_a.append(m.astype(np.float32))
+            return np.concatenate(parts_t), np.concatenate(parts_a)
+
+        notes = []
+
+        def photon_energy():
+            """keV for photonizing: the fixed value, else the median of the undulator setting."""
+            if cfg.photon_energy_keV and cfg.photon_energy_keV > 0:
+                return float(cfg.photon_energy_keV), "fixed in the config"
+            src = cfg.photon_energy
+            kd = run[src.source, src.key]
+            v = np.asarray(kd.ndarray(), float)
+            e = float(np.nanmedian(v)) * src.scale + src.offset
+            if np.nanmax(v) - np.nanmin(v) > 1e-3 * abs(e):
+                notes.append(f"photon energy changed during the run ({np.nanmin(v):g} … {np.nanmax(v):g}): "
+                             f"median {e:g} keV used")
+            if not np.isfinite(e) or e <= 0:
+                raise ValueError(f"photon energy {e} from {src.source} / {src.key}")
+            return e, f"{src.source} / {src.key}"
+
+        E_ph = np.nan
+        if cfg.photonize and any(d.kind == "image" for d in cfg.detectors.values()):
+            try:
+                E_ph, where = photon_energy()
+                notes.append(f"Jungfraus photonized with {E_ph:g} keV ({where})")
+            except Exception as e:
+                notes.append(f"photon energy not read ({type(e).__name__}: {e}): Jungfraus NOT photonized")
+
+        def read_image(name, det):
+            """(trainIds, (n, ny, nx)) per-train images of a camera-like detector (Jungfrau), read
+            in chunks of trains: bad-pixel mask, then photonizing, per frame, then the
+            memory-cell / pulse average and the train average."""
+            src = det.data
+            kd = run[src.source, src.key]
+            parts_t, parts_a = [], []
+            chunks = kd.split_trains(trains_per_part=32) if hasattr(kd, "split_trains") else [kd]
+            for ch in chunks:                                     # chunks keep the memory low
+                a = np.asarray(ch.ndarray(), np.float32)
+                a = masked(name, ch, a, src.source, src.key, det.mask_key)
+                if np.isfinite(E_ph):
+                    a = photonize(a, E_ph)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)   # all-NaN pixels
+                    a = reduce_pulses(a, src, image_ndim=2)
                 t, m = per_train_mean(ch.train_id_coordinates(), a)
                 parts_t.append(t)
                 parts_a.append(m.astype(np.float32))
@@ -332,18 +416,20 @@ class ExtraDataBackend(Backend):
             if det.kind == "agipd_overview":
                 for t in det.tiles:
                     try:
-                        _, a = read_tile(det.data, t, cfg.overview_trains or None)
-                        overview[t] = np.nanmean(a, axis=0).astype(np.float32)
+                        _, a = read_tile(det.data, t, cfg.overview_trains or None, name, det.mask_key)
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", RuntimeWarning)   # always-masked pixels
+                            overview[t] = np.nanmean(a, axis=0).astype(np.float32)
                     except Exception:
                         continue                                  # tile not recorded
             elif det.kind == "agipd_tiles":
-                tile_parts[name] = {t: read_tile(det.data, t) for t in det.tiles}
+                tile_parts[name] = {t: read_tile(det.data, t, name=name, mask_key=det.mask_key) for t in det.tiles}
                 tids = None
                 for t, (tt, _) in tile_parts[name].items():
                     tids = tt if tids is None else np.intersect1d(tids, tt)
                 parts[name] = (tids, None)                        # stacked after train matching
             else:
-                parts[name] = read(det.data, image_ndim=2)
+                parts[name] = read_image(name, det)
         if cfg.crl_enabled:
             for k in cfg.CRL_KEYS:
                 parts[k] = read(getattr(cfg, k), optional=True)
@@ -363,6 +449,7 @@ class ExtraDataBackend(Backend):
                 # data.adc[frame, px0:px1] = the notebook's np.s_[a, b:c] (a = frame in the train)
                 roi = np.s_[sp.px[0]:sp.px[1]] if sp.frame < 0 else np.s_[sp.frame, sp.px[0]:sp.px[1]]
                 a = kd.ndarray(roi=roi).astype(np.float32)   # ndarray(roi): avoids the VDS/units crash
+                a = masked(name, kd, a, sp.data.source, sp.data.key, sp.mask_key, roi=roi)      # HIREX: data.mask > 0 -> NaN
                 parts[name] = per_train_mean(kd.train_id_coordinates(), a.reshape(len(a), -1))
                 spec_names.append(name)
         common = None
@@ -399,7 +486,10 @@ class ExtraDataBackend(Backend):
         return ScanData(scan, delay, images, pump, probe, crl, common, spectra=spectra,
                         spec_axis={n: _spec_axis(cfg.spectrometers[n]) for n in spec_names},
                         overview=overview, xgm=pick(parts.get("xgm")),
-                        param=None if param_tv is None else match_trains(*param_tv, common))
+                        param=None if param_tv is None else match_trains(*param_tv, common),
+                        masks={n: (f"{v[0]}: {v[1]} of {v[2]} values masked" if isinstance(v, list) else v)
+                               for n, v in masks.items()},
+                        photon_energy=E_ph, notes=notes)
 
 
 def match_trains(t, a, trains):

@@ -26,6 +26,7 @@ detectors:
     - 512
     - 128
     kind: agipd_overview
+    mask_key: image.mask
     tiles:
     - 0
     - 1
@@ -56,6 +57,7 @@ detectors:
     - 512
     - 128
     kind: agipd_tiles
+    mask_key: image.mask
     tiles:
     - 8
     - 10
@@ -99,6 +101,7 @@ spectrometers:
     n_edge: 50
     eV0: null
     dE: null
+    mask_key: data.mask
   des:
     label: DES (probe)
     data:
@@ -115,6 +118,7 @@ spectrometers:
     n_edge: 50
     eV0: null
     dE: null
+    mask_key: ''            # DES has no data.mask
 crl_enabled: false
 crl_pump_x:
   source: ''
@@ -145,6 +149,9 @@ crl_probe_y:
   scale: 1.0
   offset: 0.0
 max_trains: 0
+# bad-pixel masks: pixels with mask > 0 become NaN (left out of every sum / mean).
+# Which key per detector / spectrometer: mask_key ('auto' = <group>.mask, '' = none).
+apply_mask: true
 preset: '7016'
 intensity_from: spectrometers
 pump_spec: hirex

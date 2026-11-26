@@ -1,77 +1,68 @@
-# Proposal 11456 template (placeholders).  Put Den's real Sources_11456.yaml in the folder
-# you start the GUI from (or next to the code): it is used instead of this file.
-# Only the first upstream spectrometer is used (one spectrometer before the SDL).
 proposal: 11456
-data: proc
+data: all
 detectors:
   jf1:
     label: Jungfrau 1
     data:
-      source: PLACEHOLDER_MID_EXP_JF1/CORR/JNGFR01:daqOutput
+      source: MID_EXP_JF500K1/CORR/JNGFR01:daqOutput
       key: data.adc
       pulses: all
       reduce: mean
       scale: 1.0
       offset: 0.0
     shape:
-    - 100
-    - 160
-    kind: image
-    tiles: []
+    - 512
+    - 1024
+
   jf2:
     label: Jungfrau 2
     data:
-      source: PLACEHOLDER_MID_EXP_JF2/CORR/JNGFR02:daqOutput
+      source: MID_EXP_JF500K2/CORR/JNGFR02:daqOutput
       key: data.adc
       pulses: all
       reduce: mean
       scale: 1.0
       offset: 0.0
     shape:
-    - 100
-    - 160
-    kind: image
-    tiles: []
+    - 512
+    - 1024
+
 pump:
-  source: PLACEHOLDER_MID_EXP_SDL/DIODE/PUMP:output
-  key: data.intensity
+  source: MID_EXP_FASTADC/ADC/DESTEST:channel_2.output
+  key: data.peaks
   pulses: all
   reduce: mean
   scale: 1.0
   offset: 0.0
 probe:
-  source: PLACEHOLDER_MID_EXP_SDL/DIODE/PROBE:output
-  key: data.intensity
+  source: MID_EXP_FASTADC/ADC/DESTEST:channel_3.output
+  key: data.peaks
   pulses: all
   reduce: mean
   scale: 1.0
   offset: 0.0
-delay:
-  source: PLACEHOLDER_MID_EXP_SDL/MDL/DELAY
-  key: actualPosition.value
-  pulses: all
-  reduce: mean
-  scale: 1.0
-  offset: 0.0
+
 spec_enabled: true
 spectrometers:
-  spec1:
-    label: Upstream spectrometer 1
+  hirex:
+    label: HIREX (pump)
     data:
-      source: PLACEHOLDER_SA2_XTD_SPEC1/CORR/RECEIVER:daqOutput
+      source: SA2_XTD6_HIREX/CORR/GOTTHARD_RECEIVER:daqOutput
       key: data.adc
       pulses: all
       reduce: mean
       scale: 1.0
       offset: 0.0
-    frame: -1
+    frame: 20
     px:
-    - 0
-    - 400
-    n_edge: 20
+    - 150
+    - 500
+    n_edge: 50
     eV0: null
     dE: null
-crl_enabled: true
+    mask_key: data.mask
+
+crl_enabled: false
 crl_pump_x:
   source: PLACEHOLDER_MID_OPT_CRL/BPM/PUMP:output
   key: data.x
@@ -101,15 +92,15 @@ crl_probe_y:
   scale: 1.0
   offset: 0.0
 max_trains: 0
-preset: '11456'
-intensity_from: diodes
-pump_spec: ''
-probe_spec: ''
-xgm:
-  source: ''
-  key: data.intensityTD
-  pulses: 0:1
+
+# photonize the Jungfraus: per frame, values < 0 -> NaN, others -> round(value / photon energy).
+# Photon energy (keV) = median of photon_energy over the run, or photon_energy_keV if > 0.
+photonize: false
+photon_energy:
+  source: MID_XTD1_UND/DOOCS/ENERGY
+  key: actualPosition.value
+  pulses: all
   reduce: mean
   scale: 1.0
   offset: 0.0
-overview_trains: 200
+photon_energy_keV: 0.0

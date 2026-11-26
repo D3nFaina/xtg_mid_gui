@@ -271,3 +271,21 @@ def test_typed_delays_are_saved_and_filled_in(tmp_path, monkeypatch):
     w.set_delay(103, "")                          # cleared: back to the data, removed from the file
     assert delays.load(path) == {} and w.scans[103].delay == w.scans[103].delay_data
     w.close()
+
+
+def test_bad_pixel_mask_toggle(win):
+    assert win.cb_mask.isChecked() and win.cfg.apply_mask
+    n = len(win.scans)
+    win.cb_mask.setChecked(False)                    # reloads the scans without masks
+    assert not win.cfg.apply_mask and len(win.scans) == n
+    win.cb_mask.setChecked(True)
+    assert win.cfg.apply_mask and len(win.scans) == n
+
+
+def test_photonize_toggle(win):
+    assert not win.cb_phot.isChecked() and not win.cfg.photonize
+    n = len(win.scans)
+    win.cb_phot.setChecked(True)                     # reloads (simulated data: no effect on values)
+    assert win.cfg.photonize and len(win.scans) == n
+    win.cb_phot.setChecked(False)
+    assert not win.cfg.photonize

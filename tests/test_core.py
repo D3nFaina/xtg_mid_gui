@@ -148,3 +148,22 @@ def test_clean_scan_never_cuts_every_shot():
     pump[:3] = 0
     keep = an.clean_scan(pump, probe, nmad=5, min_frac=0.1, report=r)
     assert not keep[:3].any() and r["cut"]["diode <= 0"] == 3 and not r["skipped"]
+
+
+def test_spectrum_integral_ignores_nan_pixels():
+    spec = np.ones((3, 100))
+    spec[:, 50] = 11.0
+    ref, cref = an.spectrum_integral(spec, n_edge=10)
+    spec[:, 5] = np.nan                               # dead pixel in the baseline region
+    spec[:, 40] = np.nan                              # dead pixel in the window
+    spec[2] = np.nan                                  # a shot with no data at all
+    v, c = an.spectrum_integral(spec, n_edge=10)
+    assert np.allclose(v[:2], ref[:2]) and np.allclose(c[:2], 50)
+    assert np.isnan(v[2]) and np.isnan(c[2])
+
+
+def test_photonize():
+    a = np.array([-0.1, 0.0, 4.4, 4.6, 9.0, 13.6, 18.2, np.nan], np.float32)
+    p = an.photonize(a, 9.0)
+    assert np.isnan(p[0]) and np.isnan(p[-1])
+    assert list(p[1:-1]) == [0, 0, 1, 1, 2, 2]

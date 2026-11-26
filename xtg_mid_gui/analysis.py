@@ -1,6 +1,8 @@
 """Pure analysis functions (no Qt), shared by the GUI, the tests and scripts."""
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 
@@ -82,18 +84,33 @@ def spectrum_integral(spec, n_edge=20, window=None):
     window = (i0, i1) pixel indices into the spectrum restricts the integral and
     centroid, e.g. to the seed line.  Returns (integral, centroid_px_index)."""
     spec = np.asarray(spec, np.float64)
-    if n_edge > 0 and spec.shape[1] > 2 * n_edge:
-        base = 0.5 * (spec[:, :n_edge].mean(axis=1) + spec[:, -n_edge:].mean(axis=1))
-        spec = spec - base[:, None]
-    i0, i1 = (0, spec.shape[1]) if window is None else (max(0, int(window[0])), min(spec.shape[1], int(window[1])))
-    sub = spec[:, i0:i1]
-    integ = sub.sum(axis=1)
-    w = np.clip(sub, 0, None)
-    ws = w.sum(axis=1)
-    with np.errstate(invalid="ignore", divide="ignore"):
+    with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)       # all-NaN edges / shots
+        if n_edge > 0 and spec.shape[1] > 2 * n_edge:
+            # NaN pixels (dead / masked) are left out of the baseline; no finite edge pixel -> 0
+            base = np.nanmean(np.concatenate([spec[:, :n_edge], spec[:, -n_edge:]], axis=1), axis=1)
+            spec = spec - np.nan_to_num(base)[:, None]
+        i0, i1 = (0, spec.shape[1]) if window is None else (max(0, int(window[0])), min(spec.shape[1], int(window[1])))
+        sub = spec[:, i0:i1]
+        empty = ~np.isfinite(sub).any(axis=1)                 # no valid pixel in the window
+        integ = np.nansum(sub, axis=1)
+        integ[empty] = np.nan
+        w = np.clip(np.nan_to_num(sub, nan=0.0), 0, None)
+        ws = w.sum(axis=1)
         cen = (w * np.arange(i0, i1)[None]).sum(axis=1) / ws
     cen[ws <= 0] = np.nan
     return integ, cen
+
+
+# ---------------------------------------------------------------- photonizing
+def photonize(a, photon_energy) -> np.ndarray:
+    """Energy-calibrated detector frames (keV) -> photon counts: values < 0 become NaN,
+    the others round(value / photon_energy).  NaN (masked) pixels stay NaN."""
+    a = np.asarray(a, np.float32)
+    with np.errstate(invalid="ignore"):
+        out = np.rint(a / np.float32(photon_energy))
+        out[a < 0] = np.nan
+    return out
 
 
 # ---------------------------------------------------------------- shot cleaning
@@ -103,8 +120,8 @@ def robust_mask(x, nmad=5.0) -> np.ndarray:
     ok = np.isfinite(x)
     if ok.sum() < 3:
         return ok
-    med = np.median(x[ok])
-    mad = np.median(np.abs(x[ok] - med)) * 1.4826
+    med = np.nanmedian(x[ok])
+    mad = np.nanmedian(np.abs(x[ok] - med)) * 1.4826
     if mad == 0:
         return ok
     return ok & (np.abs(x - med) <= nmad * mad)
@@ -174,11 +191,11 @@ def ratio_of_means(num, den):
     n = len(num)
     if n == 0:
         return np.nan, np.nan, 0
-    mn, md = num.mean(), den.mean()
+    mn, md = np.nanmean(num), np.nanmean(den)
     if md == 0:
         return np.nan, np.nan, n
     r = mn / md
-    se = np.sqrt(np.sum((num - r * den) ** 2) / max(n - 1, 1) / n) / abs(md)
+    se = np.sqrt(np.nansum((num - r * den) ** 2) / max(n - 1, 1) / n) / abs(md)
     return r, se, n
 
 
@@ -206,7 +223,7 @@ def delay_series(delays, per_scan_num, per_scan_den):
 def pearson(x, y) -> float:
     x, y = np.asarray(x, float), np.asarray(y, float)
     ok = np.isfinite(x) & np.isfinite(y)
-    if ok.sum() < 3 or np.std(x[ok]) == 0 or np.std(y[ok]) == 0:
+    if ok.sum() < 3 or np.nanstd(x[ok]) == 0 or np.nanstd(y[ok]) == 0:
         return np.nan
     return float(np.corrcoef(x[ok], y[ok])[0, 1])
 
@@ -225,7 +242,7 @@ def param_steps(x, max_steps=60):
     if cuts.size + 1 > max_steps or cuts.size == 0:
         return None
     groups = np.split(x, cuts + 1)
-    centres = np.array([g.mean() for g in groups])
+    centres = np.array([np.nanmean(g) for g in groups])
     width = max(g[-1] - g[0] for g in groups)
     if width > 0.25 * np.diff(centres).min():          # values spread out: not a stepped motor
         return None
@@ -261,7 +278,7 @@ def param_series(x, num, den=None, mode="auto", nbins=30, max_steps=60, min_shot
     for g in groups:
         m = idx == g
         if m.sum() >= min_shots:
-            out.append((x[m].mean(), *ratio_of_means(num[m], den[m])))
+            out.append((np.nanmean(x[m]), *ratio_of_means(num[m], den[m])))
     if not out:
         return z, z, z, z
     a = np.array(out, float)

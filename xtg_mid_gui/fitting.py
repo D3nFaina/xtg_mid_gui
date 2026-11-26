@@ -154,7 +154,7 @@ def fit(t, y, spec: ModelSpec, params: dict[str, Param], thermal_only=False, max
         values.setdefault(n, params[n].value)
         errors.setdefault(n, np.nan)
     res = y - func(t, values, spec)
-    return FitResult(values, errors, spec, float(np.sum(res ** 2)), success, msg, tuple(names))
+    return FitResult(values, errors, spec, float(np.nansum(res ** 2)), success, msg, tuple(names))
 
 
 # ---------------------------------------------------------------- FFT
@@ -168,7 +168,7 @@ def uniform(t, y, step=None):
     t, y = t[o], y[o]
     if len(t) < 4:
         return t, y
-    step = step or float(np.median(np.diff(t)))
+    step = step or float(np.nanmedian(np.diff(t)))
     if not step > 0:                       # repeated delays: fall back to the mean spacing
         step = (t[-1] - t[0]) / (len(t) - 1)
     if not step > 0:
@@ -183,7 +183,7 @@ def spacing_report(t, rel_tol=0.01):
     if len(t) < 3:
         return True, np.nan, np.nan, np.nan
     d = np.diff(t)
-    med = float(np.median(d))
+    med = float(np.nanmedian(d))
     return bool(d.max() - d.min() <= rel_tol * med), float(d.min()), float(d.max()), med
 
 
@@ -202,7 +202,7 @@ def fft_with_grid(t, y, t_min=None, step=None):
         z = np.array([])
         return tu, yu, z, z
     f = np.fft.rfftfreq(n, d=tu[1] - tu[0])
-    a = 2.0 / n * np.abs(np.fft.rfft(yu - yu.mean()))
+    a = 2.0 / n * np.abs(np.fft.rfft(np.nan_to_num(yu - np.nanmean(yu))))
     return tu, yu, f[: n // 2], a[: n // 2]
 
 

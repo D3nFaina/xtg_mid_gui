@@ -51,6 +51,10 @@ class Detector:
     # For the AGIPD kinds, data.source contains "{tile}", e.g. MID_DET_AGIPD1M-1/CORR/{tile}CH0:output
     kind: str = "image"
     tiles: list = field(default_factory=list)
+    # Bad-pixel mask next to the data (pixels with mask > 0 become NaN when apply_mask is on).
+    # "auto" = same group as data.key: image.data -> image.mask, data.adc -> data.mask;
+    # "" = no mask.  A mask key that is not in the run is ignored.
+    mask_key: str = "auto"
 
 
 @dataclass
@@ -63,6 +67,15 @@ class Spectrometer:
     n_edge: int = 20               # edge pixels per side for the baseline subtraction
     eV0: float | None = None       # optional calibration E = eV0 + dE * px
     dE: float | None = None
+    mask_key: str = "auto"         # bad-pixel mask (HIREX: data.mask), as Detector.mask_key
+
+
+def mask_key_for(data_key: str, mask_key: str) -> str:
+    """The mask key to read for a data key ("" = none): "auto" -> <group>.mask."""
+    if mask_key != "auto":
+        return mask_key or ""
+    group, dot, _ = data_key.rpartition(".")
+    return f"{group}.mask" if dot else ""
 
 
 def _spec(n):
@@ -106,6 +119,17 @@ class SourceConfig:
     crl_probe_y: Source = field(default_factory=lambda: Source(
         "PLACEHOLDER_MID_OPT_CRL/BPM/PROBE:output", "data.y"))
     max_trains: int = 0                       # 0 = all trains of a scan
+    # --- bad-pixel masks of the detectors and spectrometers (see Detector.mask_key):
+    #     masked pixels (mask > 0) are set to NaN and left out of every sum / mean
+    apply_mask: bool = True
+    # --- photonize the Jungfraus (detectors of kind "image"; corrected data in keV):
+    #     per frame, before the memory-cell / train average: values < 0 -> NaN,
+    #     others -> round(value / photon energy), i.e. photon counts
+    photonize: bool = False
+    # photon energy in keV: the undulator setting (median over the run) ...
+    photon_energy: Source = field(default_factory=lambda: Source(
+        "MID_XTD1_UND/DOOCS/ENERGY", "actualPosition.value"))
+    photon_energy_keV: float = 0.0            # ... or this fixed value if > 0
     # --- which proposal preset this config belongs to ("7016", "11456" or "custom")
     preset: str = "custom"
     # --- where the pump / probe intensities come from:
@@ -147,7 +171,8 @@ class SourceConfig:
                 cfg.detectors = {
                     name: Detector(det.get("label", name), Source(**det["data"]),
                                    tuple(det.get("shape", (100, 160))), det.get("kind", "image"),
-                                   [int(t) for t in det.get("tiles", [])])
+                                   [int(t) for t in det.get("tiles", [])],
+                                   det.get("mask_key", "auto") or "")
                     for name, det in v.items()}
             elif k == "spectrometers":
                 cfg.spectrometers = {

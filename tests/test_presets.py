@@ -210,3 +210,100 @@ def test_sources_file_found_from_any_folder(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError, match="cannot find nothere.yaml"):
         config_for("custom", "nothere.yaml")
     assert main(["--config", "nothere.yaml"]) == 2              # clear error, no traceback
+
+
+def _masked_fake_run(n=6):
+    """_fake_run plus a HIREX data.mask flagging the line pixel, and NaN dead pixels
+    (run 286 of p7016: NaN pixels in the HIREX window made every pump integral NaN)."""
+    run = _fake_run(n)
+    hk = ("SA2_XTD6_HIREX/CORR/GOTTHARD_RECEIVER:daqOutput", "data.adc")
+    hirex = run.keys[hk].data
+    hirex[:, 20, 1795] = np.nan                      # in the edge-baseline region
+    hirex[:, 20, 1839] = np.nan                      # inside the window
+    mask = np.zeros(hirex.shape, np.uint32)
+    mask[:, 20, 2000] = 4                            # the line pixel is "bad"
+    run.keys[(hk[0], "data.mask")] = _KD(run.keys[hk].tids, mask)
+    ak = ("MID_DET_AGIPD1M-1/CORR/8CH0:output", "image.data")
+    am = np.zeros(run.keys[ak].data.shape, np.uint32)
+    am[:, 0, 0] = 1
+    run.keys[(ak[0], "image.mask")] = _KD(run.keys[ak].tids, am)
+    return run
+
+
+@pytest.mark.parametrize("apply", [True, False])
+def test_extra_data_bad_pixel_masks(monkeypatch, apply):
+    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _masked_fake_run(), by_index=_ByIndex())
+    monkeypatch.setitem(sys.modules, "extra_data", fake)
+    cfg = config_for("7016")
+    assert cfg.apply_mask and cfg.spectrometers["hirex"].mask_key == "data.mask"
+    cfg.apply_mask = apply
+    d = ExtraDataBackend(cfg).load_scan(42)
+    assert np.isfinite(d.pump).all()                 # NaN dead pixels no longer poison the integral
+    st = d.images["agipd_sub"]
+    if apply:
+        assert np.allclose(d.pump, 0, atol=1)         # masked line pixel left out
+        assert np.isnan(st[:, 0, 0]).all() and "hirex" in d.masks
+    else:
+        assert np.allclose(d.pump, 100, atol=1)
+        assert np.allclose(st[:, 0, 0], 9.0) and not d.masks
+
+
+def test_mask_key_for():
+    from xtg_mid_gui.config import mask_key_for
+    assert mask_key_for("image.data", "auto") == "image.mask"
+    assert mask_key_for("data.adc", "auto") == "data.mask"
+    assert mask_key_for("data.adc", "") == "" and mask_key_for("data.adc", None) == ""
+    assert mask_key_for("data.adc", "data.badpix") == "data.badpix"
+
+
+def test_per_train_mean_ignores_nan():
+    t, m = per_train_mean([5, 5, 6, 6], np.array([1.0, np.nan, np.nan, np.nan]))
+    assert list(t) == [5, 6] and m[0] == 1.0 and np.isnan(m[1])
+
+
+def _jf_fake_run(n=4, energy=9.0):
+    tids = np.arange(2000, 2000 + n)
+    data = np.zeros((n, 2, 4, 6), np.float32)        # 2 memory cells of a 4x6 "Jungfrau"
+    data[:, 0, 0, 0], data[:, 1, 0, 0] = 9.2, 17.5   # 1 and 2 photons -> mean 1.5
+    data[:, :, 1, 1] = -3.0                          # negative: NaN
+    data[:, 0, 2, 2], data[:, 1, 2, 2] = 27.1, -1.0  # 3 photons, NaN -> mean 3
+    mask = np.zeros(data.shape, np.uint32)
+    mask[:, :, 3, 5] = 1
+    data[:, :, 3, 5] = 90.0
+    src = "MID_EXP_JF500K1/CORR/JNGFR01:daqOutput"
+    keys = {(src, "data.adc"): _KD(np.repeat(tids, 1), data), (src, "data.mask"): _KD(tids, mask),
+            ("MID_XTD1_UND/DOOCS/ENERGY", "actualPosition.value"): _KD(tids, np.full(n, energy)),
+            ("PUMP", "v"): _KD(tids, np.ones(n)), ("PROBE", "v"): _KD(tids, np.ones(n))}
+    return _Run(keys)
+
+
+@pytest.mark.parametrize("fixed", [0.0, 4.5])
+def test_extra_data_photonizes_jungfrau(monkeypatch, fixed):
+    from xtg_mid_gui.config import Detector, Source
+    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _jf_fake_run(), by_index=_ByIndex())
+    monkeypatch.setitem(sys.modules, "extra_data", fake)
+    cfg = SourceConfig(proposal=11456, spec_enabled=False, crl_enabled=False,
+                       detectors={"jf1": Detector("Jungfrau 1", Source("MID_EXP_JF500K1/CORR/JNGFR01:daqOutput", "data.adc"))},
+                       pump=Source("PUMP", "v"), probe=Source("PROBE", "v"), delay=Source("", ""))
+    cfg.photonize, cfg.photon_energy_keV = True, fixed
+    d = ExtraDataBackend(cfg).load_scan(1)
+    im = d.images["jf1"]
+    if fixed:                                         # 4.5 keV: 9.2 -> 2, 17.5 -> 4
+        assert d.photon_energy == 4.5 and np.allclose(im[:, 0, 0], 3.0)
+    else:                                             # 9 keV from the undulator
+        assert d.photon_energy == 9.0 and np.allclose(im[:, 0, 0], 1.5)
+        assert np.allclose(im[:, 2, 2], 3.0)          # the negative cell does not count
+    assert np.isnan(im[:, 1, 1]).all() and np.isnan(im[:, 3, 5]).all()   # negative / masked
+    assert np.allclose(im[:, 0, 1], 0.0)
+    assert any("photonized" in n for n in d.notes)
+
+
+def test_extra_data_photonize_off_keeps_keV(monkeypatch):
+    from xtg_mid_gui.config import Detector, Source
+    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _jf_fake_run(), by_index=_ByIndex())
+    monkeypatch.setitem(sys.modules, "extra_data", fake)
+    cfg = SourceConfig(proposal=11456, spec_enabled=False, crl_enabled=False,
+                       detectors={"jf1": Detector("Jungfrau 1", Source("MID_EXP_JF500K1/CORR/JNGFR01:daqOutput", "data.adc"))},
+                       pump=Source("PUMP", "v"), probe=Source("PROBE", "v"), delay=Source("", ""))
+    d = ExtraDataBackend(cfg).load_scan(1)
+    assert np.isnan(d.photon_energy) and np.allclose(d.images["jf1"][:, 0, 0], (9.2 + 17.5) / 2)

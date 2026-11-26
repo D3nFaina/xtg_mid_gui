@@ -110,3 +110,17 @@ crl_probe_y:
   scale: 1.0
   offset: 0.0
 max_trains: 0
+# bad-pixel masks: pixels with mask > 0 become NaN (left out of every sum / mean).
+# Which key per detector / spectrometer: mask_key ('auto' = <group>.mask, '' = none).
+apply_mask: true
+# photonize the Jungfraus: per frame, values < 0 -> NaN, others -> round(value / photon energy).
+# Photon energy (keV) = median of photon_energy over the run, or photon_energy_keV if > 0.
+photonize: false
+photon_energy:
+  source: MID_XTD1_UND/DOOCS/ENERGY
+  key: actualPosition.value
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+photon_energy_keV: 0.0

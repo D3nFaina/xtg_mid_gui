@@ -18,7 +18,7 @@ from . import delays as delay_file
 from . import analysis as an
 from . import theme
 from .backends import ScanData, make_backend, parse_scans
-from .config import PARAM_PRESETS, PRESET_DIR, PRESETS, Source, SourceConfig, config_for
+from .config import PARAM_PRESETS, PRESET_DIR, PRESETS, Source, SourceConfig, config_for, mask_key_for
 from .fitpage import FitPage
 from .roicheck import RoiPositionWindow
 from .rois import RoiPanel
@@ -387,6 +387,23 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         for b in (b_load, b_add, b_src):
             row.addWidget(b)
         c.body.addLayout(row)
+        self.cb_mask = QtWidgets.QCheckBox("apply bad-pixel masks")
+        self.cb_mask.setChecked(bool(getattr(self.cfg, "apply_mask", True)))
+        self.cb_mask.setToolTip("Set pixels flagged in the detector / spectrometer mask (e.g. AGIPD image.mask,\n"
+                                "HIREX data.mask; mask > 0) to NaN so they are left out of every sum and mean.\n"
+                                "Config: apply_mask, and mask_key per detector / spectrometer.\n"
+                                "Changing it reads the loaded scans again.")
+        self.cb_mask.toggled.connect(self._mask_toggled)
+        c.body.addWidget(self.cb_mask)
+        self.cb_phot = QtWidgets.QCheckBox("photonize Jungfraus")
+        self.cb_phot.setChecked(bool(getattr(self.cfg, "photonize", False)))
+        self.cb_phot.setToolTip("Per frame, before averaging: values < 0 -> NaN, the others -> round(value / photon energy),\n"
+                                "so the Jungfrau images and ROI sums are in photons (corrected data must be in keV).\n"
+                                "Photon energy: the undulator setting (config photon_energy, default\n"
+                                "MID_XTD1_UND/DOOCS/ENERGY / actualPosition.value), or photon_energy_keV if > 0.\n"
+                                "Changing it reads the loaded scans again.")
+        self.cb_phot.toggled.connect(self._photonize_toggled)
+        c.body.addWidget(self.cb_phot)
         v.addWidget(c)
 
         c = Card("Scans (one delay each)")
@@ -767,6 +784,20 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         else:
             self.recompute()
 
+    def _mask_toggled(self, on):
+        self.cfg.apply_mask = bool(on)
+        self.log(f"bad-pixel masks {'on' if on else 'off'}")
+        if self.scans:
+            self.reload_scans()
+
+    def _photonize_toggled(self, on):
+        self.cfg.photonize = bool(on)
+        self.log(f"photonizing the Jungfraus {'on' if on else 'off'}")
+        if self.backend_kind == "simulated":
+            self.log("(simulated data are not in keV: photonizing applies to real data only)")
+        if self.scans:
+            self.reload_scans()
+
     def reload_scans(self):
         """Read the loaded scans again (new sources), keeping 'use' ticks and typed delays."""
         keep_use = dict(self.use)
@@ -1083,6 +1114,10 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             self.use.setdefault(s, True)
             self._cache = {k: v for k, v in self._cache.items() if k[1] != s}
             self.log(f"scan {s}: {d.n} shots, delay {d.delay:g} fs")
+            for name, what in d.masks.items():
+                self.log(f"scan {s}: {name} bad-pixel mask {what}")
+            for note in d.notes:
+                self.log(f"scan {s}: {note}")
         self._update_delay_label()
         n_file = sum(self.scans[s].delay_from == "file" for s in scans if s in self.scans)
         if n_file:
@@ -1188,6 +1223,24 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         lines = [f"{'name':<14}{'source':<52}key"]
         for n, d in self.cfg.detectors.items():
             lines.append(f"{n:<14}{d.data.source:<52}{d.data.key}")
+        for n, sp in self.cfg.spectrometers.items():
+            lines.append(f"{n:<14}{sp.data.source:<52}{sp.data.key}")
+        if self.cfg.apply_mask:
+            lines.append("")
+            lines.append("bad-pixel masks (mask > 0 -> NaN):")
+            for n, d in list(self.cfg.detectors.items()) + list(self.cfg.spectrometers.items()):
+                lines.append(f"{n:<14}{mask_key_for(d.data.key, d.mask_key) or '(none)'}")
+        else:
+            lines.append("")
+            lines.append("bad-pixel masks: off")
+        lines.append("")
+        if not self.cfg.photonize:
+            lines.append("photonize Jungfraus: off")
+        elif self.cfg.photon_energy_keV and self.cfg.photon_energy_keV > 0:
+            lines.append(f"photonize Jungfraus: {self.cfg.photon_energy_keV:g} keV (fixed)")
+        else:
+            pe = self.cfg.photon_energy
+            lines.append(f"photonize Jungfraus: photon energy from {pe.source} / {pe.key}")
         for k in ("pump", "probe", "delay") + self.cfg.CRL_KEYS:
             s = getattr(self.cfg, k)
             lines.append(f"{k:<14}{s.source:<52}{s.key}")
@@ -1342,8 +1395,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         if profile and ok.sum() > 20:      # binned mean of y vs x: shows non-linear dependence
             edges = np.unique(np.nanpercentile(x[ok], np.linspace(2, 98, 13)))
             idx = np.digitize(x[ok], edges)
-            xm = [x[ok][idx == i].mean() for i in range(1, len(edges)) if (idx == i).sum() > 3]
-            ym = [y[ok][idx == i].mean() for i in range(1, len(edges)) if (idx == i).sum() > 3]
+            xm = [np.nanmean(x[ok][idx == i]) for i in range(1, len(edges)) if (idx == i).sum() > 3]
+            ym = [np.nanmean(y[ok][idx == i]) for i in range(1, len(edges)) if (idx == i).sum() > 3]
             p.plot(xm, ym, pen=pg.mkPen(theme.pal()["text"], width=2.5), symbol="o", symbolSize=6,
                    symbolBrush=theme.pal()["text"], symbolPen=None)
         if title:
@@ -1493,7 +1546,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 reg.setRegion((float(np.min(axis)), float(np.max(axis))))
                 reg.blockSignals(False)
                 self.spec_windows[name] = None
-            mean = np.mean(np.concatenate([self.scans[s].spectra[name][self.keep[s]] for s in scans]), axis=0)
+            mean = np.nanmean(np.concatenate([self.scans[s].spectra[name][self.keep[s]] for s in scans]), axis=0)
             ps.plot(axis, mean, pen=pg.mkPen(theme.pal()["text"], width=1.5))
             win = self.spec_windows.get(name)
             what = "integral" if win is None else f"integral [{axis[win[0]]:g}, {axis[min(win[1], len(axis)) - 1]:g}]"
