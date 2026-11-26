@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import sys
+import time
 
 import numpy as np
 import pyqtgraph as pg
@@ -17,7 +18,7 @@ from . import agipd
 from . import delays as delay_file
 from . import analysis as an
 from . import theme
-from .backends import ScanData, make_backend, parse_scans
+from .backends import ScanData, load_many, make_backend, parse_scans
 from .config import PARAM_PRESETS, PRESET_DIR, PRESETS, Source, SourceConfig, config_for, mask_key_for
 from .fitpage import FitPage
 from .roicheck import RoiPositionWindow
@@ -1138,27 +1139,22 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         known = delay_file.load(self.delays_path())
         self._typed_order = list(dict.fromkeys((list(getattr(self, '_typed_order', [])) if append else []) + list(scans)))
         scans = sorted(scans, key=lambda s: s != self.ref_scan)    # reference first: it places the ROIs
-        for i, s in enumerate(scans):
-            if i == 1 or (i == 0 and s != self.ref_scan):
-                self._ensure_rois()
-            self.statusBar().showMessage(f"loading scan {s} ({i + 1}/{len(scans)})")
+        ref = [s for s in scans if s == self.ref_scan]
+        for s, d in load_many(self.backend, [(s, None) for s in ref]):
+            self._add_loaded(s, d, known)
+        self._ensure_rois()
+        rest = [s for s in scans if s != self.ref_scan]
+        spec = self.roi_spec()
+        t0, n_done = time.time(), 0
+
+        def tick():
+            self.statusBar().showMessage(f"reading {len(rest)} runs ({n_done} done, {time.time() - t0:.0f} s)")
             QtWidgets.QApplication.processEvents()
-            try:
-                d = self.backend.load_scan(s, rois=None if s == self.ref_scan else self.roi_spec())
-            except Exception as e:          # keep going, report in the log
-                self.log(f"scan {s}: {type(e).__name__}: {e}")
-                continue
-            d.delay_data, d.delay_from = d.delay, "data"
-            if s in known:                  # the delays file wins over the data
-                d.delay, d.delay_from = known[s], "file"
-            self.scans[s] = d
-            self.use.setdefault(s, True)
-            self._cache = {k: v for k, v in self._cache.items() if k[1] != s}
-            self.log(f"scan {s}: {d.n} shots, delay {d.delay:g} fs")
-            for name, what in d.masks.items():
-                self.log(f"scan {s}: {name} bad-pixel mask {what}")
-            for note in d.notes:
-                self.log(f"scan {s}: {note}")
+
+        for s, d in load_many(self.backend, [(s, spec) for s in rest], tick=tick):
+            n_done += 1
+            self._add_loaded(s, d, known)
+        self.statusBar().clearMessage()
         self._fill_ref_combo()
         self._update_delay_label()
         n_file = sum(self.scans[s].delay_from == "file" for s in scans if s in self.scans)
@@ -1167,6 +1163,22 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._fill_scan_table()
         self._fill_sources()
         self.recompute()
+
+    def _add_loaded(self, s, d, known):
+        if isinstance(d, Exception):        # keep going, report in the log
+            self.log(f"scan {s}: {type(d).__name__}: {d}")
+            return
+        d.delay_data, d.delay_from = d.delay, "data"
+        if s in known:                      # the delays file wins over the data
+            d.delay, d.delay_from = known[s], "file"
+        self.scans[s] = d
+        self.use.setdefault(s, True)
+        self._cache = {k: v for k, v in self._cache.items() if k[1] != s}
+        self.log(f"scan {s}: {d.n} shots, delay {d.delay:g} fs")
+        for name, what in d.masks.items():
+            self.log(f"scan {s}: {name} bad-pixel mask {what}")
+        for note in d.notes:
+            self.log(f"scan {s}: {note}")
 
     def _fill_scan_table(self):
         self.tbl.blockSignals(True)
@@ -1360,15 +1372,16 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         """Read runs again with the current ROIs / reference run, keeping delay, 'use' and
         (merge=True) the ROI numbers computed before."""
         spec = self.roi_spec()
-        for i, s in enumerate(scans):
-            self.statusBar().showMessage(f"reading run {s} ({i + 1}/{len(scans)})")
+
+        def tick():
+            self.statusBar().showMessage(f"reading {len(scans)} run(s) again")
             QtWidgets.QApplication.processEvents()
-            old = self.scans[s]
-            try:
-                d = self.backend.load_scan(s, rois=None if s == self.ref_scan else spec)
-            except Exception as e:
-                self.log(f"scan {s}: {type(e).__name__}: {e}")
+
+        for s, d in load_many(self.backend, [(s, None if s == self.ref_scan else spec) for s in scans], tick=tick):
+            if isinstance(d, Exception):
+                self.log(f"scan {s}: {type(d).__name__}: {d}")
                 continue
+            old = self.scans[s]
             d.delay, d.delay_data, d.delay_from = old.delay, old.delay_data, old.delay_from
             if merge:
                 for det, st in d.stats.items():

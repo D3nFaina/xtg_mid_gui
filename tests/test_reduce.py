@@ -36,3 +36,17 @@ def test_positions_and_missing_trains():
     st2, _ = r.finish(t)
     s = st2.signal(SIG[0], BKG)
     assert np.isnan(s[5:10]).all() and np.isfinite(s[:5]).all() and np.isfinite(s[10:]).all()
+
+
+def test_load_many_in_parallel():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from _par_backend import ParBackend
+    from xtg_mid_gui.backends import load_many
+    from xtg_mid_gui.config import SourceConfig
+    be = ParBackend(SourceConfig())
+    rois = {"jf1": ([(40.0, 50.0, 6.0, 6.0, 0.0, "ellipse")], [])}
+    out = dict(load_many(be, [(101, rois), (102, rois), (999, rois)], workers=3))
+    assert isinstance(out[999], RuntimeError)
+    assert out[101].stats["jf1"].signal(rois["jf1"][0][0]) is not None
+    assert {out[101].notes[-1], out[102].notes[-1]} != {f"pid {os.getpid()}"}     # read in other processes

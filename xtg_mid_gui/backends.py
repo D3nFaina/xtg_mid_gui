@@ -10,6 +10,7 @@ combines them into a delay series.
 """
 from __future__ import annotations
 
+import os
 import warnings
 from dataclasses import dataclass, field
 
@@ -580,3 +581,51 @@ def parse_scans(text: str) -> list[int]:
         else:
             out.append(int(tok))
     return list(dict.fromkeys(out))
+
+
+# ---------------------------------------------------------------- several runs at once
+def _load_one(cls, cfg, scan, rois):
+    """Worker process: read one run (real data) and send back its ScanData."""
+    return cls(cfg).load_scan(scan, rois=rois)
+
+
+def default_workers():
+    """Parallel readers: XTG_MID_WORKERS if set, else half the cores (max 8)."""
+    try:
+        return max(1, int(os.environ["XTG_MID_WORKERS"]))
+    except (KeyError, ValueError):
+        n = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 2)
+        return max(1, min(8, n // 2))
+
+
+def load_many(backend, jobs, workers=None, tick=None):
+    """Read several runs; yields (scan, ScanData or the exception) as each one is done.
+
+    jobs: [(scan, rois)].  Real data with more than one run go to separate processes
+    (one run per process, `workers` at a time); otherwise the runs are read here, one
+    after the other.  tick() is called about 10 times a second while waiting (GUI)."""
+    jobs = list(jobs)
+    workers = default_workers() if workers is None else workers
+    if not isinstance(backend, ExtraDataBackend) or workers <= 1 or len(jobs) <= 1:
+        for s, rois in jobs:
+            if tick:
+                tick()
+            try:
+                yield s, backend.load_scan(s, rois=rois)
+            except Exception as e:      # noqa: BLE001 - reported by the caller
+                yield s, e
+        return
+    import concurrent.futures as cf
+    import multiprocessing as mp
+    with cf.ProcessPoolExecutor(min(workers, len(jobs)), mp_context=mp.get_context("spawn")) as pool:
+        futs = {pool.submit(_load_one, type(backend), backend.cfg, s, rois): s for s, rois in jobs}
+        pending = set(futs)
+        while pending:
+            done, pending = cf.wait(pending, timeout=0.1, return_when=cf.FIRST_COMPLETED)
+            for f in done:
+                try:
+                    yield futs[f], f.result()
+                except Exception as e:  # noqa: BLE001
+                    yield futs[f], e
+            if tick:
+                tick()
