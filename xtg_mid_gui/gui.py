@@ -1547,8 +1547,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             if colors is None:
                 brushes = pg.mkBrush(theme.neutral(120))
             else:                       # one QBrush per distinct colour keeps pyqtgraph's symbol cache hot
-                cache = {}
-                brushes = [cache.setdefault(c, pg.mkBrush(*c)) for c in map(tuple, np.asarray(colors)[ok].tolist())]
+                u, inv = np.unique(np.asarray(colors)[ok], axis=0, return_inverse=True)
+                brushes = np.array([pg.mkBrush(*c) for c in u.tolist()], dtype=object)[inv.ravel()]
             p.addItem(pg.ScatterPlotItem(x[ok], y[ok], size=5, pen=None, brush=brushes))
         if profile and ok.sum() > 20:      # binned mean of y vs x: shows non-linear dependence
             edges = np.unique(np.nanpercentile(x[ok], np.linspace(2, 98, 13)))
