@@ -22,6 +22,7 @@ from .config import PARAM_PRESETS, PRESET_DIR, PRESETS, Source, SourceConfig, co
 from .fitpage import FitPage
 from .roicheck import RoiPositionWindow
 from .rois import RoiPanel
+from .widgets import ShrinkCombo, elastic, fit_to_screen
 
 ALL_SCANS = "average of all used scans"
 
@@ -82,8 +83,7 @@ class ImagePane(QtWidgets.QWidget):
         top.addWidget(t)
         top.addStretch(1)
         top.addWidget(_label("image:", "muted", wrap=False))
-        self.source = QtWidgets.QComboBox()
-        self.source.setMinimumWidth(220)
+        self.source = ShrinkCombo(220, 100)
         top.addWidget(self.source)
         self.b_full = QtWidgets.QPushButton("⤢  Full page")
         self.b_full.setToolTip(full_tip)
@@ -253,7 +253,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._cache: dict = {}
         self.series: dict = {}
         self.setWindowTitle("XTG @ MID - scan analysis")
-        self.resize(1560, 960)
+        fit_to_screen(self, 1560, 960)
         self._timer = QtCore.QTimer(self, singleShot=True, interval=120)
         self._timer.timeout.connect(self.recompute)
         self._build()
@@ -302,8 +302,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         else:
             nd, ns = len(self.cfg.image_detectors()), len(self.cfg.spectrometers)
             what = f"p{self.cfg.proposal or '?'} · {nd} detectors · diamond diodes · {ns} spectrometer{'s' * (ns != 1)}"
-        h.addWidget(_label("  " + what, "muted", wrap=False))
-        h.addStretch(1)
+        h.addWidget(elastic(_label("  " + what, "muted", wrap=False)), 1)
         self.pills = {k: _label("", "pill", wrap=False) for k in ("scans", "delays", "shots", "backend")}
         for p in self.pills.values():
             h.addWidget(p)
@@ -609,8 +608,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         v = QtWidgets.QVBoxLayout(w)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(_label("signal ROI:", "muted", wrap=False))
-        self.cmb_sig = QtWidgets.QComboBox()
-        self.cmb_sig.setMinimumWidth(200)
+        self.cmb_sig = ShrinkCombo(200, 110)
         self.cmb_sig.currentTextChanged.connect(lambda *_: self._draw_corr())
         row.addWidget(self.cmb_sig)
         row.addWidget(_label("   diodes:", "muted", wrap=False))
@@ -619,9 +617,9 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.cmb_diode_view.setToolTip("histograms, or each diode vs shot number in acquisition (scan) order")
         self.cmb_diode_view.currentTextChanged.connect(lambda *_: self._draw_corr())
         row.addWidget(self.cmb_diode_view)
-        row.addWidget(_label("   points coloured by delay (viridis: early = dark, late = yellow)", "muted", wrap=False))
         row.addStretch(1)
         v.addLayout(row)
+        v.addWidget(_label("points coloured by delay (viridis: early = dark, late = yellow)", "muted"))
         g = _glw()
         self.c_pp = theme.style_plot(g.addPlot(row=0, col=0), "Pump vs probe", "probe diode", "pump diode")
         self.c_hpu = theme.style_plot(g.addPlot(row=0, col=1), "Pump diode", "pump", "shots")
@@ -644,9 +642,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             "muted"))
         row = QtWidgets.QHBoxLayout()
         row.addWidget(_label("preset:", "muted", wrap=False))
-        self.cmb_ppreset = QtWidgets.QComboBox()
+        self.cmb_ppreset = ShrinkCombo(230, 120)
         self.cmb_ppreset.addItems(["custom"] + list(PARAM_PRESETS))
-        self.cmb_ppreset.setMinimumWidth(230)
         self.cmb_ppreset.setToolTip("Parameters read in the p7016 notebooks (rocking_MID.ipynb)")
         self.cmb_ppreset.currentTextChanged.connect(self._param_preset_chosen)
         row.addWidget(self.cmb_ppreset)
@@ -655,7 +652,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.ed_pkey = QtWidgets.QLineEdit(self.cfg.param.key)
         self.ed_pkey.setPlaceholderText("key, e.g. midExpUppMotorT3.actualPosition")
         for ed, wd in ((self.ed_psrc, 3), (self.ed_pkey, 3)):
-            ed.setMinimumWidth(180)
+            ed.setMinimumWidth(110)
             row.addWidget(ed, wd)
         self.ed_plabel = QtWidgets.QLineEdit(self.cfg.param_label)
         self.ed_plabel.setPlaceholderText("name")
@@ -671,7 +668,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         v.addLayout(row)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(_label("points:", "muted", wrap=False))
-        self.cmb_pbin = QtWidgets.QComboBox()
+        self.cmb_pbin = ShrinkCombo(0, 120)
         self.cmb_pbin.addItems(["auto (one per motor step)", "equal-width bins"])
         self.cmb_pbin.setToolTip("auto: one point per motor position if the parameter is stepped (up to 60 "
                                  "positions),\notherwise equal-width bins (continuous drift, e.g. temperature)")
@@ -679,16 +676,15 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.sp_pbins.setRange(2, 500)
         self.sp_pbins.setValue(30)
         self.sp_pbins.setPrefix("bins ")
-        self.cmb_pgroup = QtWidgets.QComboBox()
+        self.cmb_pgroup = ShrinkCombo(0, 110)
         self.cmb_pgroup.addItems(["all scans pooled", "one curve per scan", "one curve per delay"])
-        self.cmb_psig = QtWidgets.QComboBox()
-        self.cmb_psig.setMinimumWidth(200)
+        self.cmb_psig = ShrinkCombo(200, 110)
         self.cmb_psig.setToolTip("ROI for the per-scan / per-delay curves and the shot scatter")
         for wdg in (self.cmb_pbin, self.sp_pbins, self.cmb_pgroup):
             row.addWidget(wdg)
         row.addWidget(_label("   ROI:", "muted", wrap=False))
         row.addWidget(self.cmb_psig)
-        self.lbl_pinfo = _label("", "muted", wrap=False)
+        self.lbl_pinfo = elastic(_label("", "muted", wrap=False), tip=False)
         row.addWidget(self.lbl_pinfo, 1)
         v.addLayout(row)
         self.cmb_pbin.currentTextChanged.connect(lambda *_: self._draw_param())
@@ -843,10 +839,10 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         scans = self.sorted_scans()
         missing = [s for s in scans if self.scans[s].param is None]
         if not self.cfg.param.source:
-            self.lbl_pinfo.setText("   type a source and key, then Read")
+            self._param_info("   type a source and key, then Read")
             return
         if not scans or len(missing) == len(scans):
-            self.lbl_pinfo.setText("   no parameter values yet: press Read" if scans else "   load scans first")
+            self._param_info("   no parameter values yet: press Read" if scans else "   load scans first")
             return
         use = [s for s in scans if s not in missing]
         x = self._concat_over(use, self.param_values)
@@ -858,7 +854,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         info = f"   {len(use)} scans · {fin.size} shots · {rng} · {what}"
         if missing:
             info += f" · no parameter in scan {', '.join(map(str, missing))}"
-        self.lbl_pinfo.setText(info)
+        self._param_info(info)
         norm = self.cmb_norm.currentText()
         nrm = self._concat_over(use, lambda s: an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe')))
         theme.set_title(self.pp_norm, f"Normalised by {norm}")
@@ -918,6 +914,10 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         cols = pg.colormap.get("viridis").map(u, mode="byte")
         cols[:, 3] = 150
         return cols
+
+    def _param_info(self, text):
+        self.lbl_pinfo.setText(text)
+        self.lbl_pinfo.setToolTip(text.strip())   # the label may be cut short in a narrow window
 
     def _build_crl(self):
         w = QtWidgets.QWidget()
@@ -1021,7 +1021,9 @@ class XTGMidWindow(QtWidgets.QMainWindow):
 
     # ============================================================ theme / CRL
     def _theme_text(self):
-        self.b_theme.setText("☀  Light mode" if theme.mode() == "dark" else "☾  Dark mode")
+        dark = theme.mode() == "dark"
+        self.b_theme.setText("☀" if dark else "☾")           # icon only: keeps the header narrow
+        self.b_theme.setToolTip("Switch to light mode" if dark else "Switch to dark mode")
 
     def toggle_theme(self):
         old = theme.mode()
@@ -1254,8 +1256,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def _update_placeholder_pill(self):
         ph = self.cfg.placeholders()
         self.pill_ph.setVisible(bool(ph))
-        self.pill_ph.setText(f"{len(ph)} placeholder source names")
-        self.pill_ph.setToolTip("\n".join(ph))
+        self.pill_ph.setText(f"{len(ph)} placeholder{'s' * (len(ph) != 1)}")
+        self.pill_ph.setToolTip("Placeholder source names (edit them in the sources file):\n" + "\n".join(ph))
         self.pills["backend"].setText(self.backend_kind)
 
     # ============================================================ analysis

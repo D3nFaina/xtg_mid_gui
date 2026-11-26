@@ -1,0 +1,106 @@
+proposal: 11456
+data: all
+detectors:
+  jf1:
+    label: Jungfrau 1
+    data:
+      source: MID_EXP_JF500K1/CORR/JNGFR01:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    shape:
+    - 512
+    - 1024
+
+  jf2:
+    label: Jungfrau 2
+    data:
+      source: MID_EXP_JF500K2/CORR/JNGFR02:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    shape:
+    - 512
+    - 1024
+
+pump:
+  source: MID_EXP_FASTADC/ADC/DESTEST:channel_2.output
+  key: data.peaks
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+probe:
+  source: MID_EXP_FASTADC/ADC/DESTEST:channel_3.output
+  key: data.peaks
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+
+spec_enabled: true
+spectrometers:
+  hirex:
+    label: HIREX (pump)
+    data:
+      source: SA2_XTD6_HIREX/CORR/GOTTHARD_RECEIVER:daqOutput
+      key: data.adc
+      pulses: all
+      reduce: mean
+      scale: 1.0
+      offset: 0.0
+    frame: 20
+    px:
+    - 620
+    - 1590
+    n_edge: 50
+    eV0: null
+    dE: null
+    mask_key: data.mask
+
+crl_enabled: false
+crl_pump_x:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PUMP:output
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_pump_y:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PUMP:output
+  key: data.y
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_probe_x:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PROBE:output
+  key: data.x
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+crl_probe_y:
+  source: PLACEHOLDER_MID_OPT_CRL/BPM/PROBE:output
+  key: data.y
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+max_trains: 0
+
+# photonize the Jungfraus: per frame, values < 0 -> NaN, others -> round(value / photon energy).
+# Photon energy (keV) = median of photon_energy over the run, or photon_energy_keV if > 0.
+photonize: false
+photon_energy:
+  source: MID_XTD1_UND/DOOCS/ENERGY
+  key: actualPosition.value
+  pulses: all
+  reduce: mean
+  scale: 1.0
+  offset: 0.0
+photon_energy_keV: 0.0

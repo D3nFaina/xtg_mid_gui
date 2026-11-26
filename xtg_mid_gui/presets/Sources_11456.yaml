@@ -55,8 +55,8 @@ spectrometers:
       offset: 0.0
     frame: 20
     px:
-    - 150
-    - 500
+    - 0
+    - 2047
     n_edge: 50
     eV0: null
     dE: null

@@ -8,6 +8,7 @@ from pyqtgraph.Qt import QtCore, QtWidgets
 
 from . import analysis as an
 from . import theme
+from .widgets import ShrinkCombo, fit_to_screen
 
 
 class RoiPositionWindow(QtWidgets.QWidget):
@@ -18,7 +19,7 @@ class RoiPositionWindow(QtWidgets.QWidget):
         self.main = main
         self.setObjectName("root")                # dark / light theme as the main window
         self.setWindowTitle("XTG @ MID - ROI position check")
-        self.resize(1250, 780)
+        fit_to_screen(self, 1250, 780)
         self._cache = {}
         v = QtWidgets.QVBoxLayout(self)
         row = QtWidgets.QHBoxLayout()
@@ -28,8 +29,7 @@ class RoiPositionWindow(QtWidgets.QWidget):
             row.addWidget(w)
 
         lab("ROI:")
-        self.cmb_roi = QtWidgets.QComboBox()
-        self.cmb_roi.setMinimumWidth(220)
+        self.cmb_roi = ShrinkCombo(220, 120)
         row.addWidget(self.cmb_roi)
         lab("   position:")
         self.cmb_mode = QtWidgets.QComboBox()
