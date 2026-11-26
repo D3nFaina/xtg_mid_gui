@@ -40,12 +40,12 @@ def test_match_trains():
 
 
 def test_extra_data_reads_param(monkeypatch):
-    from test_presets import _ByIndex, _KD, _fake_run
+    from test_presets import _ByIndex, _ById, _KD, _fake_run
     run = _fake_run()
     run.keys[("MID_EXP_UPP/MDL/DATA_SELECTOR_1", "midExpUppMotorT3.actualPosition")] = _KD(
         np.arange(1000, 1006), np.array([0.0, 0, 0.5, 0.5, 1.0, 1.0]))
     monkeypatch.setitem(sys.modules, "extra_data",
-                        types.SimpleNamespace(open_run=lambda *a, **k: run, by_index=_ByIndex()))
+                        types.SimpleNamespace(open_run=lambda *a, **k: run, by_index=_ByIndex(), by_id=_ById()))
     cfg = config_for("7016")
     assert cfg.param.key == "midExpUppMotorT3.actualPosition" and not cfg.param_enabled
     be = ExtraDataBackend(cfg)

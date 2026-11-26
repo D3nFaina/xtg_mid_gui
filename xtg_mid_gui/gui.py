@@ -248,6 +248,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.sim_kw = sim_kw or {}
         self.backend = make_backend(backend, self.cfg, **(self.sim_kw if backend == "simulated" else {}))
         self.scans: dict[int, ScanData] = {}
+        self._stale: set = set()
         self.use: dict[int, bool] = {}
         self.keep: dict[int, np.ndarray] = {}
         self._cache: dict = {}
@@ -303,7 +304,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             nd, ns = len(self.cfg.image_detectors()), len(self.cfg.spectrometers)
             what = f"p{self.cfg.proposal or '?'} · {nd} detectors · diamond diodes · {ns} spectrometer{'s' * (ns != 1)}"
         h.addWidget(elastic(_label("  " + what, "muted", wrap=False)), 1)
-        self.pills = {k: _label("", "pill", wrap=False) for k in ("scans", "delays", "shots", "backend")}
+        self.pills = {k: _label("", "pill", wrap=False) for k in ("scans", "delays", "shots", "memory", "backend")}
         for p in self.pills.values():
             h.addWidget(p)
         self.pill_ph = _label("", "tbc", wrap=False)
@@ -414,6 +415,20 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.cmb_order.currentTextChanged.connect(lambda *_: self._fill_scan_table())
         orow.addWidget(self.cmb_order, 1)
         c.body.addLayout(orow)
+        rrow = QtWidgets.QHBoxLayout()
+        rrow.addWidget(_label("reference run", "muted", wrap=False))
+        self.cmb_ref = QtWidgets.QComboBox()
+        self.cmb_ref.setToolTip("The only run whose images are all kept in memory: place the ROIs on it.\n"
+                                "The other runs are read in pieces and only their numbers are kept\n"
+                                "(ROI signals, peak positions, run average image), a few MB per run.")
+        self.cmb_ref.activated.connect(lambda *_: self.set_reference(self.cmb_ref.currentData()))
+        rrow.addWidget(self.cmb_ref, 1)
+        c.body.addLayout(rrow)
+        self.b_recalc = QtWidgets.QPushButton("", objectName="primary")
+        self.b_recalc.setToolTip("The ROIs changed: read the other runs again to get their numbers for the new ROIs")
+        self.b_recalc.clicked.connect(self.recalc_stale)
+        self.b_recalc.setVisible(False)
+        c.body.addWidget(self.b_recalc)
         self.tbl = QtWidgets.QTableWidget(0, 5)
         self.tbl.setHorizontalHeaderLabels(["use", "run", "delay (fs)", "shots", "kept"])
         self.tbl.verticalHeader().setVisible(False)
@@ -1093,19 +1108,43 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         if sims and not self.ed_scans.text():                 # hint only: nothing is loaded until Load
             self.ed_scans.setText(f"{min(sims)}-{max(sims)}")
 
+    def _ensure_rois(self):
+        """Place the default ROIs on the reference run's image before the other runs are
+        reduced (they are reduced with the ROIs as they are at that moment)."""
+        d = self.scans.get(self.ref_scan)
+        if d is None:
+            return
+        for det, v in self.views.items():
+            if not v.panel.rois and det in d.images:
+                v.panel.shape = d.mean_image(det).shape
+                v.panel.defaults()
+
+    def roi_spec(self):
+        """{detector: (all ROI geometries, background geometries)} for reducing the runs
+        that are not the reference run (switched-off ROIs too, so ticking them is free)."""
+        return {det: ([r.geometry() for r in v.panel.rois], v.panel.background_geoms())
+                for det, v in self.views.items()}
+
     def load(self, scans, append=False):
         self.cfg.proposal = self.sp_prop.value()
         if not append:
             self.scans.clear()
             self.use.clear()
             self._cache.clear()
+            if getattr(self, "ref_scan", None) not in scans:
+                self.ref_scan = scans[0] if scans else None
+        elif getattr(self, "ref_scan", None) not in self.scans and scans:
+            self.ref_scan = scans[0]
         known = delay_file.load(self.delays_path())
         self._typed_order = list(dict.fromkeys((list(getattr(self, '_typed_order', [])) if append else []) + list(scans)))
+        scans = sorted(scans, key=lambda s: s != self.ref_scan)    # reference first: it places the ROIs
         for i, s in enumerate(scans):
+            if i == 1 or (i == 0 and s != self.ref_scan):
+                self._ensure_rois()
             self.statusBar().showMessage(f"loading scan {s} ({i + 1}/{len(scans)})")
             QtWidgets.QApplication.processEvents()
             try:
-                d = self.backend.load_scan(s)
+                d = self.backend.load_scan(s, rois=None if s == self.ref_scan else self.roi_spec())
             except Exception as e:          # keep going, report in the log
                 self.log(f"scan {s}: {type(e).__name__}: {e}")
                 continue
@@ -1120,6 +1159,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 self.log(f"scan {s}: {name} bad-pixel mask {what}")
             for note in d.notes:
                 self.log(f"scan {s}: {note}")
+        self._fill_ref_combo()
         self._update_delay_label()
         n_file = sum(self.scans[s].delay_from == "file" for s in scans if s in self.scans)
         if n_file:
@@ -1286,8 +1326,80 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         if key not in self._cache:
             if len(self._cache) > 2000:        # old ROI positions
                 self._cache.clear()
-            self._cache[key] = an.roi_signal(self.scans[scan].images[det], roi.geometry(), bkg)
+            d = self.scans[scan]
+            if det in d.stats:                 # not the reference run: numbers kept at load time
+                v = d.stats[det].signal(roi.geometry(), bkg)
+                if v is None:                  # ROI moved since: this run must be read again
+                    self._stale.add(scan)
+                    return np.full(d.n, np.nan)
+                self._cache[key] = v
+            else:
+                self._cache[key] = an.roi_signal(d.images[det], roi.geometry(), bkg)
         return self._cache[key]
+
+    # ------------------------------------------------------------ reference run / light runs
+    def _fill_ref_combo(self):
+        self.cmb_ref.blockSignals(True)
+        self.cmb_ref.clear()
+        for s in sorted(self.scans):
+            self.cmb_ref.addItem(f"{s}  (all images)" if s == self.ref_scan else str(s), s)
+        i = self.cmb_ref.findData(self.ref_scan)
+        self.cmb_ref.setCurrentIndex(max(i, 0))
+        self.cmb_ref.blockSignals(False)
+
+    def set_reference(self, scan):
+        """Make `scan` the run whose images are kept; the old one is reduced to numbers."""
+        if scan is None or scan == self.ref_scan or scan not in self.scans:
+            return
+        old, self.ref_scan = self.ref_scan, scan
+        self.log(f"reference run: {scan} (all images kept); run {old} keeps only its numbers")
+        self._reread([s for s in (old, scan) if s in self.scans])
+        self._fill_ref_combo()
+
+    def _reread(self, scans, merge=False):
+        """Read runs again with the current ROIs / reference run, keeping delay, 'use' and
+        (merge=True) the ROI numbers computed before."""
+        spec = self.roi_spec()
+        for i, s in enumerate(scans):
+            self.statusBar().showMessage(f"reading run {s} ({i + 1}/{len(scans)})")
+            QtWidgets.QApplication.processEvents()
+            old = self.scans[s]
+            try:
+                d = self.backend.load_scan(s, rois=None if s == self.ref_scan else spec)
+            except Exception as e:
+                self.log(f"scan {s}: {type(e).__name__}: {e}")
+                continue
+            d.delay, d.delay_data, d.delay_from = old.delay, old.delay_data, old.delay_from
+            if merge:
+                for det, st in d.stats.items():
+                    if det in old.stats:
+                        old.stats[det].merge(st)
+                        d.stats[det] = old.stats[det]
+            self.scans[s] = d
+            self._cache = {k: v for k, v in self._cache.items() if k[1] != s}
+        self.statusBar().clearMessage()
+        if getattr(self, "pos_win", None) is not None:
+            self.pos_win._cache.clear()
+        self.recompute()
+
+    def recalc_stale(self):
+        stale = sorted(self._stale & set(self.scans))
+        if stale:
+            self.log(f"ROIs changed: reading runs {', '.join(map(str, stale))} again")
+            self._reread(stale, merge=True)
+
+    def _update_stale(self):
+        n = len(self._stale & set(self.scans))
+        self.b_recalc.setVisible(n > 0)
+        self.b_recalc.setText(f"Recalculate {n} run{'s' * (n != 1)} for the new ROIs")
+
+    def memory_mb(self) -> float:
+        tot = 0
+        for d in self.scans.values():
+            tot += sum(a.nbytes for a in d.images.values() if a is not None)
+            tot += sum(st.nbytes for st in d.stats.values())
+            tot += sum(a.nbytes for a in d.spectra.values() if a is not None)
+        return tot / 1e6
 
     def signal_keys(self):
         out, seen = [], {}
@@ -1302,6 +1414,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
 
     def recompute(self):
         scans = self.sorted_scans()
+        self._stale = set()
         cut, skipped = {}, {}
         for s in scans:
             r = {}
@@ -1347,6 +1460,10 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.pills["scans"].setText(f"{len(scans)} scans")
         self.pills["delays"].setText(f"{len(delays)} delays")
         self.pills["shots"].setText(f"{n_keep}/{n_all} shots kept")
+        self.pills["memory"].setText(f"{self.memory_mb():.0f} MB")
+        self.pills["memory"].setToolTip("memory used by the loaded runs (reference run: all images;\n"
+                                        "other runs: only their numbers)")
+        self._update_stale()
 
     def _compute_series(self, scans):
         """series[label] = dict(raw=(t, y, e, n), norm=(t, y, e, n), color)."""

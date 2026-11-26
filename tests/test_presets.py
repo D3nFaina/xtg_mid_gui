@@ -95,7 +95,7 @@ class _KD:
         return self.data if roi is None else np.stack([e[roi] for e in self.data])
 
     def select_trains(self, sel):
-        keep = np.unique(self.tids)[sel]
+        keep = np.asarray(sel.ids) if isinstance(sel, _ById) else np.unique(self.tids)[sel]
         m = np.isin(self.tids, keep)
         return _KD(self.tids[m], self.data[m])
 
@@ -124,6 +124,14 @@ class _ByIndex:
         return s
 
 
+class _ById:
+    def __init__(self, ids=None):
+        self.ids = ids
+
+    def __getitem__(self, ids):
+        return _ById(ids)
+
+
 def _fake_run(n=6):
     rng = np.random.default_rng(0)
     tids = np.arange(1000, 1000 + n)
@@ -147,7 +155,7 @@ def _fake_run(n=6):
 
 
 def test_extra_data_reader_7016(monkeypatch):
-    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _fake_run(), by_index=_ByIndex())
+    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _fake_run(), by_index=_ByIndex(), by_id=_ById())
     monkeypatch.setitem(sys.modules, "extra_data", fake)
     cfg = config_for("7016")
     d = ExtraDataBackend(cfg).load_scan(42)
@@ -232,7 +240,7 @@ def _masked_fake_run(n=6):
 
 @pytest.mark.parametrize("apply", [True, False])
 def test_extra_data_bad_pixel_masks(monkeypatch, apply):
-    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _masked_fake_run(), by_index=_ByIndex())
+    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _masked_fake_run(), by_index=_ByIndex(), by_id=_ById())
     monkeypatch.setitem(sys.modules, "extra_data", fake)
     cfg = config_for("7016")
     assert cfg.apply_mask and cfg.spectrometers["hirex"].mask_key == "data.mask"
@@ -280,7 +288,7 @@ def _jf_fake_run(n=4, energy=9.0):
 @pytest.mark.parametrize("fixed", [0.0, 4.5])
 def test_extra_data_photonizes_jungfrau(monkeypatch, fixed):
     from xtg_mid_gui.config import Detector, Source
-    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _jf_fake_run(), by_index=_ByIndex())
+    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _jf_fake_run(), by_index=_ByIndex(), by_id=_ById())
     monkeypatch.setitem(sys.modules, "extra_data", fake)
     cfg = SourceConfig(proposal=11456, spec_enabled=False, crl_enabled=False,
                        detectors={"jf1": Detector("Jungfrau 1", Source("MID_EXP_JF500K1/CORR/JNGFR01:daqOutput", "data.adc"))},
@@ -300,7 +308,7 @@ def test_extra_data_photonizes_jungfrau(monkeypatch, fixed):
 
 def test_extra_data_photonize_off_keeps_keV(monkeypatch):
     from xtg_mid_gui.config import Detector, Source
-    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _jf_fake_run(), by_index=_ByIndex())
+    fake = types.SimpleNamespace(open_run=lambda prop, run, data="proc": _jf_fake_run(), by_index=_ByIndex(), by_id=_ById())
     monkeypatch.setitem(sys.modules, "extra_data", fake)
     cfg = SourceConfig(proposal=11456, spec_enabled=False, crl_enabled=False,
                        detectors={"jf1": Detector("Jungfrau 1", Source("MID_EXP_JF500K1/CORR/JNGFR01:daqOutput", "data.adc"))},

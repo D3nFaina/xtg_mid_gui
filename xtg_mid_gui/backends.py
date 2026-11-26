@@ -18,6 +18,7 @@ import numpy as np
 from . import agipd
 from .analysis import photonize, spectrum_integral
 from .config import SourceConfig, Source, mask_key_for
+from .reduce import ImageReducer, reduce_images
 
 
 @dataclass
@@ -39,13 +40,21 @@ class ScanData:
     masks: dict = field(default_factory=dict)      # name -> what the bad-pixel mask did (for the log)
     photon_energy: float = np.nan                  # keV used to photonize the Jungfraus, NaN = not photonized
     notes: list = field(default_factory=list)      # other messages for the log
+    stats: dict = field(default_factory=dict)      # detector -> ImageStats when its images were not kept
     _mean: dict = field(default_factory=dict, repr=False)
 
     @property
     def n(self) -> int:
         return len(self.pump)
 
+    @property
+    def reduced(self) -> bool:
+        """True for a run whose images were reduced to numbers (not the reference run)."""
+        return bool(self.stats)
+
     def mean_image(self, det: str) -> np.ndarray:
+        if det in self.stats:
+            return self.stats[det].mean
         if det not in self._mean:
             with np.errstate(invalid="ignore"), warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)          # NaN gaps between AGIPD tiles
@@ -59,7 +68,10 @@ class Backend:
     def __init__(self, cfg: SourceConfig):
         self.cfg = cfg
 
-    def load_scan(self, scan: int) -> ScanData:     # pragma: no cover - interface
+    def load_scan(self, scan: int, rois=None) -> ScanData:     # pragma: no cover - interface
+        """rois=None: keep every per-train image (reference run).  rois = {detector:
+        (signal geometries, background geometries)}: keep only ImageStats for those
+        detectors (all other runs)."""
         raise NotImplementedError
 
     def load_param(self, scan: int, trains):
@@ -118,7 +130,7 @@ class SimulatedBackend(Backend):
     def scans(self) -> list[int]:
         return sorted(self.delays)
 
-    def load_scan(self, scan: int) -> ScanData:
+    def load_scan(self, scan: int, rois=None) -> ScanData:
         if scan not in self.delays:
             raise KeyError(f"simulated scans are {min(self.delays)}-{max(self.delays)}")
         rng = np.random.default_rng(self.seed * 1000 + scan)
@@ -196,9 +208,14 @@ class SimulatedBackend(Backend):
         xgm = None
         if self.cfg.xgm.source:
             xgm = (0.6 * sase + 0.4 * (pump_true + probe_true)) * 900 * (1 + rng.normal(0, 0.04, n))
+        trains = np.arange(n) + scan * 10000
+        stats = {}
+        for det, (sig, bkg) in (rois or {}).items():     # not the reference run: keep only numbers
+            if det in images:
+                stats[det] = reduce_images(images.pop(det), trains, sig, bkg)
         return ScanData(scan, delay, images, pump_d, probe_d, crl if self.cfg.crl_enabled else {},
-                        np.arange(n) + scan * 10000, spectra=spectra, spec_axis=axes,
-                        overview=overview, xgm=xgm, param=param)
+                        trains, spectra=spectra, spec_axis=axes,
+                        overview=overview, xgm=xgm, param=param, stats=stats)
 
     # ------------------------------------------------------------ simulated AGIPD
     # tile -> features (row, col, sigma_row, sigma_col) in the stored 512 x 128 tile, kind
@@ -261,6 +278,9 @@ def reduce_pulses(a: np.ndarray, src: Source, image_ndim: int = 0) -> np.ndarray
     return out.astype(np.float32 if image_ndim else np.float64) * src.scale + src.offset
 
 
+CHUNK = 32                     # trains read at a time from the run files
+
+
 def per_train_mean(tids, arr):
     """Average all entries that share a trainId (e.g. several AGIPD frames per train).
     Returns (sorted unique trainIds, (n_trains, ...) means)."""
@@ -295,7 +315,7 @@ class ExtraDataBackend(Backend):
         t, a = per_train_mean(kd.train_id_coordinates(), reduce_pulses(kd.ndarray(), cfg.param))
         return match_trains(t, a, trains)
 
-    def load_scan(self, scan: int) -> ScanData:
+    def load_scan(self, scan: int, rois=None) -> ScanData:
         import extra_data as ex
         cfg = self.cfg
         if not cfg.proposal:
@@ -387,14 +407,15 @@ class ExtraDataBackend(Backend):
             except Exception as e:
                 notes.append(f"photon energy not read ({type(e).__name__}: {e}): Jungfraus NOT photonized")
 
-        def read_image(name, det):
+        def read_image(name, det, reducer=None):
             """(trainIds, (n, ny, nx)) per-train images of a camera-like detector (Jungfrau), read
             in chunks of trains: bad-pixel mask, then photonizing, per frame, then the
-            memory-cell / pulse average and the train average."""
+            memory-cell / pulse average and the train average.  With a reducer the chunks
+            go into it and only the trainIds come back: (trainIds, None)."""
             src = det.data
             kd = run[src.source, src.key]
             parts_t, parts_a = [], []
-            chunks = kd.split_trains(trains_per_part=32) if hasattr(kd, "split_trains") else [kd]
+            chunks = kd.split_trains(trains_per_part=CHUNK) if hasattr(kd, "split_trains") else [kd]
             for ch in chunks:                                     # chunks keep the memory low
                 a = np.asarray(ch.ndarray(), np.float32)
                 a = masked(name, ch, a, src.source, src.key, det.mask_key)
@@ -405,10 +426,40 @@ class ExtraDataBackend(Backend):
                     a = reduce_pulses(a, src, image_ndim=2)
                 t, m = per_train_mean(ch.train_id_coordinates(), a)
                 parts_t.append(t)
-                parts_a.append(m.astype(np.float32))
-            return np.concatenate(parts_t), np.concatenate(parts_a)
+                if reducer is None:
+                    parts_a.append(m.astype(np.float32))
+                else:
+                    reducer.add(t, m)
+            t = np.concatenate(parts_t) if parts_t else np.array([], np.uint64)
+            return (t, np.concatenate(parts_a)) if reducer is None else (np.unique(t), None)
+
+        def read_stack_reduced(name, det, reducer):
+            """AGIPD tiles of a non-reference run: read all tiles one chunk of trains at a
+            time, stack them as in the analysis view and reduce; returns the trainIds."""
+            kds = {t: run[det.data.source.format(tile=t), det.data.key] for t in det.tiles}
+            tids = None
+            for kd in kds.values():
+                u = np.unique(np.asarray(kd.train_id_coordinates()))
+                tids = u if tids is None else np.intersect1d(tids, u)
+            for i in range(0, len(tids), CHUNK):
+                chunk = tids[i:i + CHUNK]
+                per = {}
+                for t, kd in kds.items():
+                    ch = kd.select_trains(ex.by_id[chunk.tolist()])
+                    a = np.asarray(ch.ndarray(), np.float32)
+                    a = masked(f"{name} tile {t}", ch, a, det.data.source.format(tile=t), det.data.key,
+                               det.mask_key)
+                    a = a.reshape(-1, *a.shape[-2:])
+                    tt, m = per_train_mean(ch.train_id_coordinates(), a)
+                    full = np.full((len(chunk),) + m.shape[1:], np.nan, np.float32)
+                    j = np.searchsorted(chunk, tt)
+                    full[j] = m
+                    per[t] = full
+                reducer.add(chunk, agipd.stack(per, det.tiles))
+            return tids, None
 
         parts, overview = {}, {}
+        reducers = {name: ImageReducer(*rois[name]) for name in (rois or {}) if name in cfg.detectors}
         if cfg.intensity_from == "diodes":
             parts["pump"], parts["probe"] = read(cfg.pump), read(cfg.probe)
         tile_parts = {}
@@ -422,6 +473,8 @@ class ExtraDataBackend(Backend):
                             overview[t] = np.nanmean(a, axis=0).astype(np.float32)
                     except Exception:
                         continue                                  # tile not recorded
+            elif det.kind == "agipd_tiles" and name in reducers:
+                parts[name] = read_stack_reduced(name, det, reducers[name])
             elif det.kind == "agipd_tiles":
                 tile_parts[name] = {t: read_tile(det.data, t, name=name, mask_key=det.mask_key) for t in det.tiles}
                 tids = None
@@ -429,7 +482,7 @@ class ExtraDataBackend(Backend):
                     tids = tt if tids is None else np.intersect1d(tids, tt)
                 parts[name] = (tids, None)                        # stacked after train matching
             else:
-                parts[name] = read_image(name, det)
+                parts[name] = read_image(name, det, reducers.get(name))
         if cfg.crl_enabled:
             for k in cfg.CRL_KEYS:
                 parts[k] = read(getattr(cfg, k), optional=True)
@@ -462,9 +515,11 @@ class ExtraDataBackend(Backend):
         def pick(v):
             return None if v is None or v[1] is None else v[1][np.searchsorted(v[0], common)]
 
-        images = {}
+        images, stats = {}, {}
         for name, det in cfg.detectors.items():
-            if det.kind == "agipd_tiles":
+            if name in reducers:
+                stats[name] = reducers[name].finish(common)[0]
+            elif det.kind == "agipd_tiles":
                 per = {t: tt_a[1][np.searchsorted(tt_a[0], common)] for t, tt_a in tile_parts[name].items()}
                 images[name] = agipd.stack(per, det.tiles)
             elif det.kind == "image":
@@ -489,7 +544,7 @@ class ExtraDataBackend(Backend):
                         param=None if param_tv is None else match_trains(*param_tv, common),
                         masks={n: (f"{v[0]}: {v[1]} of {v[2]} values masked" if isinstance(v, list) else v)
                                for n, v in masks.items()},
-                        photon_energy=E_ph, notes=notes)
+                        photon_energy=E_ph, notes=notes, stats=stats)
 
 
 def match_trains(t, a, trains):
