@@ -189,3 +189,24 @@ def test_parse_free_run_lists():
     from xtg_mid_gui.backends import parse_scans
     assert parse_scans("92, 96, 94, 95") == [92, 96, 94, 95]
     assert parse_scans("95 96 98-99, 96") == [95, 96, 98, 99]
+
+
+def test_sources_file_found_from_any_folder(tmp_path, monkeypatch):
+    """Den, 2026-11-26: 'Cannot find Sources_7016.yaml'.  The name alone must work from any
+    folder (shipped preset), in any letter case, and a missing file must say where it looked."""
+    import pytest
+    from xtg_mid_gui.config import PRESET_DIR, config_for, preset_of_file
+    from xtg_mid_gui.gui import main
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XTG_MID_START_DIR", str(tmp_path))
+    cfg = config_for("custom", "Sources_7016.yaml")           # --config Sources_7016.yaml
+    assert cfg.preset == "7016" and cfg._source_file == str(PRESET_DIR / "Sources_7016.yaml")
+    assert "agipd" in cfg.detectors
+    assert config_for("7016")._source_file == str(PRESET_DIR / "Sources_7016.yaml")
+    assert config_for("11456")._source_file == str(PRESET_DIR / "Sources_11456.yaml")
+    (tmp_path / "sources_7016.yaml").write_text((PRESET_DIR / "Sources_7016.yaml").read_text())
+    assert config_for("7016")._source_file.endswith("sources_7016.yaml")   # start folder first, any case
+    assert preset_of_file("/x/SOURCES_11456.yaml") == "11456" and preset_of_file("my.yaml") is None
+    with pytest.raises(FileNotFoundError, match="cannot find nothere.yaml"):
+        config_for("custom", "nothere.yaml")
+    assert main(["--config", "nothere.yaml"]) == 2              # clear error, no traceback

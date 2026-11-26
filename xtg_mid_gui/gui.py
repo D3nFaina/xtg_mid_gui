@@ -421,9 +421,18 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.cmb_norm = QtWidgets.QComboBox()
         self.cmb_norm.addItems(list(an.NORMALISERS))
         self.cmb_norm.setCurrentText("pump^2 x probe")
+        self.cb_pos = QtWidgets.QCheckBox("drop shots with a diode ≤ 0")
+        self.cb_pos.setChecked(True)
+        self.cb_pos.setToolTip("Untick for monitors that can be negative (offset, negative-going signal,\n"
+                               "spectrometer integral after baseline subtraction)")
+        self.cb_pos.toggled.connect(self._schedule)
         f.addRow("MAD cut (σ)", self.sp_mad)
         f.addRow("min diode / median", self.sp_min)
+        f.addRow("", self.cb_pos)
         f.addRow("normalise by", self.cmb_norm)
+        self.lbl_cuts = _label("", "muted")
+        self.lbl_cuts.setToolTip("A cut that would remove every shot of a scan is skipped for that scan")
+        f.addRow(self.lbl_cuts)
         for w in (self.sp_mad, self.sp_min):
             w.valueChanged.connect(self._schedule)
         self.cmb_norm.currentTextChanged.connect(self._schedule)
@@ -1020,7 +1029,12 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.switch_preset(preset, path or None)
 
     def switch_preset(self, preset, custom_path=None):
-        cfg = config_for(preset, custom_path)
+        try:
+            cfg = config_for(preset, custom_path)
+        except Exception as e:                       # e.g. a file that is not there: say so, keep the window
+            self.log(f"proposal {preset}: {type(e).__name__}: {e}")
+            QtWidgets.QMessageBox.warning(self, "Sources file", str(e))
+            return None
         if preset == "custom" and not custom_path:
             cfg.proposal = self.sp_prop.value()
         new = XTGMidWindow(cfg, self.backend_kind, self.sim_kw)
@@ -1029,7 +1043,10 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         new.show()
         new.log(f"proposal {cfg.proposal or '(not set)'}: sources from "
                 f"{getattr(cfg, '_source_file', '') or custom_path or 'built-in defaults'}")
-        if preset == "11456" and str(PRESET_DIR) in getattr(cfg, "_source_file", str(PRESET_DIR)):
+        if preset in ("7016", "11456") and not getattr(cfg, "_source_file", ""):
+            new.log(f"{preset}: Sources_{preset}.yaml not found anywhere (also not in {PRESET_DIR}): "
+                    "built-in defaults. Re-unzip the package.")
+        elif preset == "11456" and str(PRESET_DIR) in getattr(cfg, "_source_file", str(PRESET_DIR)):
             new.log("11456: no Sources_11456.yaml found in the start folder, using the template (placeholders)")
         XTGMidWindow.last = new
         self.close()
@@ -1230,9 +1247,24 @@ class XTGMidWindow(QtWidgets.QMainWindow):
 
     def recompute(self):
         scans = self.sorted_scans()
+        cut, skipped = {}, {}
         for s in scans:
-            d = self.scans[s]
-            self.keep[s] = an.clean_scan(self.inten(s, 'pump'), self.inten(s, 'probe'), self.sp_mad.value(), self.sp_min.value())
+            r = {}
+            self.keep[s] = an.clean_scan(self.inten(s, 'pump'), self.inten(s, 'probe'), self.sp_mad.value(),
+                                         self.sp_min.value(), self.cb_pos.isChecked(), report=r)
+            for k, v in r["cut"].items():
+                cut[k] = cut.get(k, 0) + v
+            for k in r["skipped"]:
+                skipped.setdefault(k, []).append(s)
+        txt = "cut: " + (", ".join(f"{v} {k}" for k, v in cut.items() if v) or "none")
+        if skipped:
+            txt += "<br><span style='color:#e0a030'>not applied (would cut all shots): " + "; ".join(
+                f"{k} in scan {', '.join(map(str, v))}" for k, v in skipped.items()) + "</span>"
+            msg = "; ".join(f"{k}: scans {', '.join(map(str, v))}" for k, v in skipped.items())
+            if msg != getattr(self, "_last_skip_msg", None):
+                self.log(f"cut skipped, it would remove every shot ({msg})")
+                self._last_skip_msg = msg
+        self.lbl_cuts.setText(txt)
         for i in range(self.tbl.rowCount()):
             s = self.tbl.item(i, 0).data(QtCore.Qt.UserRole)
             if s in self.keep and self.use.get(s):
@@ -1634,10 +1666,15 @@ def main(argv=None):
     ap.add_argument("--no-spec", action="store_true", help="hide the upstream spectrometer page")
     args = ap.parse_args(argv)
 
-    preset = args.preset or ("custom" if args.config else
+    from .config import preset_of_file
+    preset = args.preset or ((preset_of_file(args.config) or "custom") if args.config else
                              str(args.proposal) if str(args.proposal) in ("7016", "11456") else
                              "custom" if args.proposal else "11456")
-    cfg = config_for(preset, args.config)
+    try:
+        cfg = config_for(preset, args.config)
+    except (OSError, ImportError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     if args.write_config:
         cfg.save(args.write_config)
         print(f"wrote {args.write_config}")

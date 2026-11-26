@@ -171,7 +171,9 @@ class SourceConfig:
     def load(cls, path) -> "SourceConfig":
         path = Path(path)
         txt = path.read_text()
-        d = yaml.safe_load(txt) if yaml and path.suffix in (".yaml", ".yml") else json.loads(txt)
+        if path.suffix in (".yaml", ".yml") and yaml is None:
+            raise ImportError(f"reading {path.name} needs PyYAML: pip install pyyaml")
+        d = yaml.safe_load(txt) if path.suffix in (".yaml", ".yml") else json.loads(txt)
         return cls.from_dict(d or {})
 
     def placeholders(self) -> list[str]:
@@ -215,17 +217,52 @@ def _search_dirs():
     code, then the presets shipped with it."""
     import os
     start = os.environ.get("XTG_MID_START_DIR")           # set by run_xtg_mid_gui.sh
-    dirs = ([Path(start)] if start else []) + [Path.cwd(), Path(__file__).resolve().parents[1], PRESET_DIR]
+    try:
+        cwd = [Path.cwd()]
+    except OSError:                                       # current folder was deleted
+        cwd = []
+    dirs = ([Path(start)] if start else []) + cwd + [Path(__file__).resolve().parents[1], PRESET_DIR]
     return list(dict.fromkeys(dirs))
+
+
+def _find_in(d: Path, name: str):
+    """d/name, also with other letter case (Maxwell is case-sensitive: sources_7016.yaml)."""
+    if (d / name).is_file():
+        return d / name
+    try:
+        return next((f for f in d.iterdir() if f.name.lower() == name.lower() and f.is_file()), None)
+    except OSError:
+        return None
 
 
 def find_preset_file(preset: str):
     names = {"7016": ["Sources_7016.yaml"], "11456": ["Sources_11456.yaml"]}.get(preset, [])
     for d in _search_dirs():
         for n in names:
-            if (d / n).is_file():
-                return d / n
+            f = _find_in(d, n)
+            if f is not None:
+                return f
     return None
+
+
+def find_sources_file(path):
+    """A sources file given by the user (--config / file dialog): as typed, else the same
+    name in the start folder, the current folder, the code folder or the shipped presets."""
+    p = Path(path).expanduser()
+    if p.is_file():
+        return p
+    for d in _search_dirs():
+        f = _find_in(d, p.name)
+        if f is not None:
+            return f
+    raise FileNotFoundError(f"cannot find {path}: looked as typed and in "
+                            + ", ".join(str(d) for d in _search_dirs()))
+
+
+def preset_of_file(path):
+    """'Sources_7016.yaml' -> '7016' (any folder, any letter case), else None."""
+    n = Path(path).name.lower()
+    return next((k for k in ("7016", "11456") if n == f"sources_{k}.yaml"), None)
 
 
 def config_for(preset: str, custom_path=None) -> "SourceConfig":
@@ -236,8 +273,20 @@ def config_for(preset: str, custom_path=None) -> "SourceConfig":
               (one spectrometer before the SDL)
     * custom: custom_path if given, else the built-in defaults
     """
+    if preset == "custom" and custom_path and preset_of_file(custom_path):
+        preset = preset_of_file(custom_path)          # --config Sources_7016.yaml = proposal 7016
+        if not Path(custom_path).expanduser().is_file():
+            custom_path = None                        # found by name below
+    if preset != "custom" and custom_path:            # an explicit file for a proposal preset
+        path = find_sources_file(custom_path)
+        cfg = SourceConfig.load(path)
+        cfg.preset, cfg.proposal, cfg._source_file = preset, int(preset), str(path)
+        if preset == "11456" and len(cfg.spectrometers) > 1:
+            first = next(iter(cfg.spectrometers))
+            cfg.spectrometers = {first: cfg.spectrometers[first]}
+        return cfg
     if preset == "custom":
-        cfg = SourceConfig.load(custom_path) if custom_path else SourceConfig()
+        cfg = SourceConfig.load(find_sources_file(custom_path)) if custom_path else SourceConfig()
         cfg.preset = "custom"
         return cfg
     path = find_preset_file(preset)

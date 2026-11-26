@@ -130,3 +130,21 @@ def test_rect_roi_mask_and_signal():
     s, npx = an.roi_stats(imgs, (50, 50, 10, 5, 0, "rectangle"))
     se, npe = an.roi_stats(imgs, (50, 50, 10, 5, 0, "ellipse"))
     assert npx == 200 and np.allclose(s, 200) and npe < npx
+
+
+def test_clean_scan_never_cuts_every_shot():
+    rng = np.random.default_rng(3)
+    neg = -np.abs(rng.normal(5, 0.5, 50))               # negative-going monitor
+    probe = rng.normal(5, 0.5, 50)
+    r = {}
+    keep = an.clean_scan(neg, probe, nmad=5, min_frac=0.1, report=r)
+    assert keep.sum() >= 45                             # "diode <= 0" and "beam off" not applied
+    assert "diode <= 0" in r["skipped"] and any(k.startswith("beam off") for k in r["skipped"])
+    keep = an.clean_scan(neg, probe, nmad=5, min_frac=0, positive=False)
+    assert keep.sum() >= 45
+    assert an.clean_scan(np.full(5, np.nan), probe[:5]).all()   # no monitor at all: keep everything
+    r = {}
+    pump = rng.normal(5, 0.5, 50)
+    pump[:3] = 0
+    keep = an.clean_scan(pump, probe, nmad=5, min_frac=0.1, report=r)
+    assert not keep[:3].any() and r["cut"]["diode <= 0"] == 3 and not r["skipped"]

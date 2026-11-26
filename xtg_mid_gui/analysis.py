@@ -110,14 +110,42 @@ def robust_mask(x, nmad=5.0) -> np.ndarray:
     return ok & (np.abs(x - med) <= nmad * mad)
 
 
-def clean_scan(pump, probe, nmad=5.0, min_frac=0.0) -> np.ndarray:
-    """Keep shots with positive diodes, inside the MAD cut, and above
-    min_frac x median (drops X-ray-off shots)."""
-    keep = (pump > 0) & (probe > 0)
-    if nmad > 0:
-        keep &= robust_mask(pump, nmad) & robust_mask(probe, nmad)
-    if min_frac > 0:
-        keep &= (pump > min_frac * np.nanmedian(pump)) & (probe > min_frac * np.nanmedian(probe))
+def clean_scan(pump, probe, nmad=5.0, min_frac=0.0, positive=True, report=None) -> np.ndarray:
+    """Keep shots with finite diodes, (optionally) positive diodes, inside the MAD cut,
+    and above min_frac x median (drops X-ray-off shots).
+
+    A cut that would remove EVERY shot of the scan is not applied (e.g. diodes that are
+    negative-going or have an offset, or a monitor that is all NaN); its name goes into
+    report["skipped"].  report["cut"] counts the shots each applied cut removed."""
+    pump, probe = np.asarray(pump, float), np.asarray(probe, float)
+    rep = {"cut": {}, "skipped": []} if report is None else report
+    rep.setdefault("cut", {})
+    rep.setdefault("skipped", [])
+    keep = np.isfinite(pump) & np.isfinite(probe)
+    if not keep.any():
+        rep["skipped"].append("no finite diode values")
+        return np.ones(len(pump), bool)
+
+    def apply(name, m):
+        nonlocal keep
+        new = keep & m
+        if new.any():
+            rep["cut"][name] = int(keep.sum() - new.sum())
+            keep = new
+        else:
+            rep["skipped"].append(name)
+
+    with np.errstate(invalid="ignore"):
+        if positive:
+            apply("diode <= 0", (pump > 0) & (probe > 0))
+        if nmad > 0:
+            apply("MAD", robust_mask(pump, nmad) & robust_mask(probe, nmad))
+        if min_frac > 0:
+            mp, mq = np.nanmedian(pump[keep]), np.nanmedian(probe[keep])
+            if mp > 0 and mq > 0:
+                apply("beam off", (pump > min_frac * mp) & (probe > min_frac * mq))
+            else:
+                rep["skipped"].append("beam off (median <= 0)")
     return keep
 
 
