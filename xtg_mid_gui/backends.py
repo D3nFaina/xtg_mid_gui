@@ -499,6 +499,8 @@ class ExtraDataBackend(Backend):
         tile_parts = {}
         for name, det in cfg.detectors.items():
             if det.kind == "agipd_overview":
+                if rois:                                          # light run: the all-tiles view uses the reference run
+                    continue
                 for t in det.tiles:
                     try:
                         _, a = read_tile(det.data, t, cfg.overview_trains or None, name, det.mask_key)
