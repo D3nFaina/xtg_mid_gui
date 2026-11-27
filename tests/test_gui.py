@@ -38,7 +38,7 @@ def test_add_rename_move_delete_roi(win):
     panel.rename(spec, "my peak")
     spec.item.setPos((5, 5))
     win.recompute()
-    label = f"{win.cfg.detectors['jf1'].label} · my peak"
+    label = "my peak"
     assert label in win.series
     panel.remove(spec)
     win.recompute()
@@ -301,7 +301,7 @@ def test_background_toggle_and_xaxis():
     det = next(iter(w.views))
     roi = w.views[det].panel.signal_rois()[0]
     with_bkg = w.roi_values(det, 102, roi, w.bkg_geoms(det))
-    w.cb_bkg.setChecked(False)
+    w.cmb_bkg.setCurrentIndex(w.cmb_bkg.findData("none"))
     assert w.bkg_geoms(det) == []
     no_bkg = w.roi_values(det, 102, roi, w.bkg_geoms(det))
     assert np.all(np.isfinite(no_bkg)) and not np.allclose(no_bkg, with_bkg)
@@ -309,3 +309,29 @@ def test_background_toggle_and_xaxis():
     w.cmb_xaxis.activated.emit(1)
     assert w.tabs.isTabVisible(w.param_tab) and w.cmb_xaxis.currentIndex() == 0
     assert w.sidebar.widget().minimumSizeHint().width() <= 262
+
+
+def test_background_run_and_flag():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    w = XTGMidWindow(sim_kw=dict(n_shots=20))
+    w.load([101, 102, 103])
+    det = next(iter(w.views))
+    roi = w.views[det].panel.signal_rois()[0]
+    w.cmb_bkg.setCurrentIndex(w.cmb_bkg.findData("none"))
+    plain = {s: w.roi_values(det, s, roi, w.bkg_geoms(det)) for s in (101, 102)}
+    w.scans[101].delay = -500.0
+    w._fill_bkg_combo()
+    w.cmb_bkg.setCurrentIndex(w.cmb_bkg.findData(101))
+    w._bkg_changed()
+    assert w.bkg_mode() == ("run", 101) and w.bkg_geoms(det) == []
+    v = w.roi_values(det, 102, roi, w.bkg_geoms(det))
+    assert np.allclose(v, plain[102] - np.nanmean(plain[101][w.keep[101]]))
+    assert w.lbl_bkgwarn.text() == ""
+    w.scans[101].delay = 200.0
+    w.recompute()
+    assert "≥ 0" in w.lbl_bkgwarn.text()
+    labels = [k[0] for k in w.signal_keys()]
+    assert not any("Jungfrau" in l for l in labels) and len(set(labels)) == len(labels)

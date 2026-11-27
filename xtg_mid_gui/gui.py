@@ -10,6 +10,7 @@ import csv
 import os
 import sys
 import time
+import warnings
 
 import numpy as np
 import pyqtgraph as pg
@@ -620,13 +621,18 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         w = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(w)
         row = QtWidgets.QHBoxLayout()
-        self.cb_bkg = QtWidgets.QCheckBox("subtract background ROI")
-        self.cb_bkg.setChecked(True)
-        self.cb_bkg.setToolTip("On: signal = ROI sum minus the ROI's pixels x the mean background-ROI pixel.\n"
-                               "Off: plain ROI sum. Applies to every page (delay series, correlations,\n"
-                               "parameter scan, fit).")
-        self.cb_bkg.toggled.connect(self._bkg_toggled)
-        row.addWidget(self.cb_bkg)
+        row.addWidget(_label("background:", "muted", wrap=False))
+        self.cmb_bkg = ShrinkCombo(230, 120)
+        self.cmb_bkg.setToolTip("background ROI: signal = ROI sum minus the ROI's pixels x the mean background-ROI pixel.\n"
+                                "none: plain ROI sum.\n"
+                                "run …: every shot's plain ROI sum minus the mean ROI sum (kept shots) of that run,\n"
+                                "e.g. a run before time zero. Normalisation is applied after the subtraction.\n"
+                                "Applies to every page (delay series, correlations, parameter scan, fit).")
+        self.cmb_bkg.activated.connect(lambda *_: self._bkg_changed())
+        row.addWidget(self.cmb_bkg)
+        self.lbl_bkgwarn = _label("", wrap=False)
+        self.lbl_bkgwarn.setStyleSheet("color:#e0a030; font-weight:600")
+        row.addWidget(self.lbl_bkgwarn)
         row.addWidget(_label("     x axis:", "muted", wrap=False))
         self.cmb_xaxis = QtWidgets.QComboBox()
         self.cmb_xaxis.addItems(["delay (one per run)", "another variable…"])
@@ -766,15 +772,52 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             self.ed_plabel.setText(name.split(" (")[0])
             self.ed_punit.setText(unit)
 
+    def bkg_mode(self):
+        """("roi", None), ("none", None) or ("run", run number)."""
+        d = self.cmb_bkg.currentData() if hasattr(self, "cmb_bkg") else None
+        if isinstance(d, int) and d in self.scans:
+            return "run", d
+        return (d if d in ("roi", "none") else "roi"), None
+
     def bkg_geoms(self, det):
-        """Background ROIs of a detector, or none when 'subtract background ROI' is off."""
-        if hasattr(self, "cb_bkg") and not self.cb_bkg.isChecked():
+        """Background ROIs of a detector: only in 'background ROI' mode."""
+        if self.bkg_mode()[0] != "roi":
             return []
         return self.views[det].panel.background_geoms()
 
-    def _bkg_toggled(self, on):
-        theme.set_title(self.p_raw, "ROI signal (background subtracted)" if on else "ROI signal (no background subtraction)")
-        self.log(f"background subtraction {'on' if on else 'off'}")
+    def _fill_bkg_combo(self):
+        cur = self.cmb_bkg.currentData() if self.cmb_bkg.count() else "roi"
+        self.cmb_bkg.blockSignals(True)
+        self.cmb_bkg.clear()
+        self.cmb_bkg.addItem("background ROI", "roi")
+        self.cmb_bkg.addItem("none", "none")
+        for s in sorted(self.scans, key=lambda k: (np.nan_to_num(self.scans[k].delay, nan=np.inf), k)):
+            dl = self.scans[s].delay
+            self.cmb_bkg.addItem(f"run {s}  ({'?' if np.isnan(dl) else f'{dl:g}'} fs)", s)
+        i = self.cmb_bkg.findData(cur)
+        self.cmb_bkg.setCurrentIndex(max(i, 0))
+        self.cmb_bkg.blockSignals(False)
+
+    def _update_bkg_flag(self):
+        mode, run = self.bkg_mode()
+        txt = ""
+        if mode == "run":
+            dl = self.scans[run].delay
+            if not np.isfinite(dl):
+                txt = f"⚠ run {run} has no delay: is it really before time zero?"
+            elif dl >= 0:
+                txt = f"⚠ run {run} is at delay {dl:g} fs (≥ 0): not a background run"
+        if txt and txt != getattr(self, "_last_bkg_flag", ""):
+            self.log(txt)
+        self._last_bkg_flag = txt
+        self.lbl_bkgwarn.setText("  " + txt if txt else "")
+        titles = {"roi": "ROI signal (background ROI subtracted)", "none": "ROI signal (no background subtraction)",
+                  "run": f"ROI signal minus run {run}"}
+        theme.set_title(self.p_raw, titles[mode])
+
+    def _bkg_changed(self):
+        mode, run = self.bkg_mode()
+        self.log("background: " + {"roi": "background ROI", "none": "none"}.get(mode, f"run {run}"))
         self.recompute()
 
     def _xaxis_chosen(self, i):
@@ -1221,6 +1264,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             self._add_loaded(s, d, known)
         self.statusBar().clearMessage()
         self._fill_ref_combo()
+        self._fill_bkg_combo()
         self._update_delay_label()
         n_file = sum(self.scans[s].delay_from == "file" for s in scans if s in self.scans)
         if n_file:
@@ -1399,6 +1443,20 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         return self._cache[key]
 
     def roi_values(self, det, scan, roi, bkg):
+        """Per-shot ROI signal of a scan; in 'run' background mode minus the mean of the
+        background run (its kept shots)."""
+        v = self._roi_values(det, scan, roi, bkg)
+        mode, run = self.bkg_mode()
+        if mode != "run":
+            return v
+        b = self._roi_values(det, run, roi, bkg)
+        keep = self.keep.get(run)
+        b = b[keep] if keep is not None and len(keep) == len(b) else b
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            return v - np.nanmean(b)
+
+    def _roi_values(self, det, scan, roi, bkg):
         key = (det, scan, roi.geometry(), tuple(bkg))
         if key not in self._cache:
             if len(self._cache) > 2000:        # old ROI positions
@@ -1432,6 +1490,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.log(f"reference run: {scan} (all images kept); run {old} keeps only its numbers")
         self._reread([s for s in (old, scan) if s in self.scans])
         self._fill_ref_combo()
+        self._fill_bkg_combo()
 
     def _reread(self, scans, merge=False):
         """Read runs again with the current ROIs / reference run, keeping delay, 'use' and
@@ -1480,14 +1539,22 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         return tot / 1e6
 
     def signal_keys(self):
+        """(label, detector, roi) for every signal ROI.  Label = the ROI name; only when two
+        detectors have a ROI of the same name is a short detector tag added (JF1, JF2 …)."""
+        rois = [(det, r) for det, view in self.views.items() for r in view.panel.signal_rois()]
+        count = {}
+        for _, r in rois:
+            count[r.name] = count.get(r.name, 0) + 1
         out, seen = [], {}
-        for det, view in self.views.items():
-            for r in view.panel.signal_rois():
-                label = f"{self.cfg.detectors[det].label} · {r.name}"
-                seen[label] = seen.get(label, 0) + 1
-                if seen[label] > 1:                 # two ROIs with the same name: keep both
-                    label += f" ({seen[label]})"
-                out.append((label, det, r))
+        for det, r in rois:
+            label = r.name
+            if count[r.name] > 1:
+                tag = self.cfg.detectors[det].label.replace("Jungfrau ", "JF").replace("Jungfrau", "JF")
+                label = f"{r.name} [{tag}]"
+            seen[label] = seen.get(label, 0) + 1
+            if seen[label] > 1:                     # same name twice on one detector: keep both
+                label += f" ({seen[label]})"
+            out.append((label, det, r))
         return out
 
     def recompute(self):
@@ -1542,6 +1609,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.pills["memory"].setToolTip("memory used by the loaded runs (reference run: all images;\n"
                                         "other runs: only their numbers)")
         self._update_stale()
+        self._update_bkg_flag()
 
     def _compute_series(self, scans):
         """series[label] = dict(raw=(t, y, e, n), norm=(t, y, e, n), color)."""
@@ -1562,7 +1630,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             return
         style = QtCore.Qt.DashLine if dash else QtCore.Qt.SolidLine
         p.addItem(pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), pen=pg.mkPen(color + (150,), width=1)))
-        p.plot(t, y, pen=pg.mkPen(color, width=2, style=style), symbol="o", symbolSize=6,
+        p.plot(t, y, pen=pg.mkPen(color, width=1, style=style), symbol="o", symbolSize=4,
                symbolBrush=color, symbolPen=None, name=name)
 
     def _draw_delay(self, scans):
@@ -1594,7 +1662,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             idx = np.digitize(x[ok], edges)
             xm = [np.nanmean(x[ok][idx == i]) for i in range(1, len(edges)) if (idx == i).sum() > 3]
             ym = [np.nanmean(y[ok][idx == i]) for i in range(1, len(edges)) if (idx == i).sum() > 3]
-            p.plot(xm, ym, pen=pg.mkPen(theme.pal()["text"], width=2.5), symbol="o", symbolSize=6,
+            p.plot(xm, ym, pen=pg.mkPen(theme.pal()["text"], width=1.5), symbol="o", symbolSize=4,
                    symbolBrush=theme.pal()["text"], symbolPen=None)
         if title:
             r = an.pearson(x, y) if with_r else np.nan
@@ -1634,7 +1702,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 x = x[np.isfinite(x)]
                 if x.size:
                     h, e = np.histogram(x, bins=50)
-                    p.plot(e, h, stepMode="center", fillLevel=0, brush=c + (110,), pen=pg.mkPen(c, width=1.5))
+                    p.plot(e, h, stepMode="center", fillLevel=0, brush=c + (110,), pen=pg.mkPen(c, width=1))
         keys = {k[0]: k for k in self.signal_keys()}
         sel = keys.get(self.cmb_sig.currentText())
         for p in (self.c_spu, self.c_spr, self.c_sn):
@@ -1681,7 +1749,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         if x.size:
             h, e = np.histogram(x, bins=50)
             p.plot(e, h, stepMode="center", fillLevel=0, brush=tuple(color[:3]) + (110,),
-                   pen=pg.mkPen(tuple(color[:3]), width=1.5))
+                   pen=pg.mkPen(tuple(color[:3]), width=1))
 
     def _trace(self, p, fn, color, title, ylabel):
         """fn(s) -> per-shot values vs shot number, scans in acquisition (scan-number) order.
@@ -1744,7 +1812,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 reg.blockSignals(False)
                 self.spec_windows[name] = None
             mean = np.nanmean(np.concatenate([self.scans[s].spectra[name][self.keep[s]] for s in scans]), axis=0)
-            ps.plot(axis, mean, pen=pg.mkPen(theme.pal()["text"], width=1.5))
+            ps.plot(axis, mean, pen=pg.mkPen(theme.pal()["text"], width=1))
             win = self.spec_windows.get(name)
             what = "integral" if win is None else f"integral [{axis[win[0]]:g}, {axis[min(win[1], len(axis)) - 1]:g}]"
             label = self.cfg.spectrometers[name].label

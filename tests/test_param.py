@@ -76,7 +76,7 @@ def test_param_page_pools_runs_and_finds_the_peak():
     assert w.ed_pkey.text() == "midExpUppMotorT3.actualPosition" and w.ed_punit.text() == "deg"
     w.apply_param()                                             # single run
     curves = {c.name(): c.getData() for c in w.pp_norm.listDataItems()}
-    x, y = curves["Jungfrau 1 · TG +1"]
+    x, y = curves["TG +1"]
     assert len(x) == 9 and abs(x[np.nanargmax(y)] - 0.25) < 0.2
     w.load([102, 103], append=True)                             # more runs: read on load, pooled
     assert all(w.scans[s].param is not None for s in (101, 102, 103))
