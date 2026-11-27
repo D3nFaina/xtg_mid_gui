@@ -289,3 +289,23 @@ def test_photonize_toggle(win):
     assert win.cfg.photonize and len(win.scans) == n
     win.cb_phot.setChecked(False)
     assert not win.cfg.photonize
+
+
+def test_background_toggle_and_xaxis():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    w = XTGMidWindow(sim_kw=dict(n_shots=20))
+    w.load([101, 102, 103])
+    det = next(iter(w.views))
+    roi = w.views[det].panel.signal_rois()[0]
+    with_bkg = w.roi_values(det, 102, roi, w.bkg_geoms(det))
+    w.cb_bkg.setChecked(False)
+    assert w.bkg_geoms(det) == []
+    no_bkg = w.roi_values(det, 102, roi, w.bkg_geoms(det))
+    assert np.all(np.isfinite(no_bkg)) and not np.allclose(no_bkg, with_bkg)
+    assert np.allclose(no_bkg, w.scans[102].stats[det].sums[__import__("xtg_mid_gui.reduce", fromlist=["x"]).geom_key(roi.geometry())])
+    w.cmb_xaxis.activated.emit(1)
+    assert w.tabs.isTabVisible(w.param_tab) and w.cmb_xaxis.currentIndex() == 0
+    assert w.sidebar.widget().minimumSizeHint().width() <= 262

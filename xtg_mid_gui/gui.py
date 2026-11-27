@@ -7,6 +7,7 @@ per scan, upstream spectrometers, CRL pointing.  PyQt5 + pyqtgraph.
 from __future__ import annotations
 
 import csv
+import os
 import sys
 import time
 
@@ -289,7 +290,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.param_tab = 6
         split.addWidget(self.tabs)
         split.setStretchFactor(1, 1)
-        split.setSizes([330, 1230])
+        split.setSizes([280, 1280])
         outer.addWidget(split, 1)
         self.setStatusBar(QtWidgets.QStatusBar())
         self.set_crl_visible(self.cfg.crl_enabled)
@@ -347,13 +348,13 @@ class XTGMidWindow(QtWidgets.QMainWindow):
 
         c = Card("Data")
         f = c.form()
-        self.cmb_backend = QtWidgets.QComboBox()
+        self.cmb_backend = ShrinkCombo(120, 70)
         self.cmb_backend.addItems(["simulated", "extra_data"])
         self.cmb_backend.setCurrentText(self.backend_kind)
         self.cmb_backend.currentTextChanged.connect(self._backend_changed)
         f.addRow("backend", self.cmb_backend)
         prow = QtWidgets.QHBoxLayout()
-        self.cmb_preset = QtWidgets.QComboBox()
+        self.cmb_preset = ShrinkCombo(140, 70)
         for k, txt in PRESETS.items():
             self.cmb_preset.addItem(txt, k)
         self.cmb_preset.setCurrentIndex(max(self.cmb_preset.findData(self.cfg.preset), 0))
@@ -370,7 +371,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         prow.addWidget(self.sp_prop)
         f.addRow("proposal", prow)
         src = getattr(self.cfg, "_source_file", "") or "built-in defaults"
-        self.lbl_cfgfile = _label(f"sources: {src}", "muted")
+        self.lbl_cfgfile = elastic(_label(f"sources: {os.path.basename(str(src)) or src}", "muted", wrap=False))
+        self.lbl_cfgfile.setToolTip(str(src))
         f.addRow(self.lbl_cfgfile)
         sims = getattr(self.backend, "scans", lambda: [])()
         self.ed_scans = QtWidgets.QLineEdit(f"{min(sims)}-{max(sims)}" if sims else "")
@@ -381,14 +383,14 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         b_load.setToolTip("replace the loaded scans")
         b_add = QtWidgets.QPushButton("Add")
         b_add.setToolTip("append these scans to the delay series")
-        b_src = QtWidgets.QPushButton("Sources…")
+        b_src = QtWidgets.QPushButton("Sources")
         b_load.clicked.connect(lambda: self.load(parse_scans(self.ed_scans.text()), append=False))
         b_add.clicked.connect(lambda: self.load(parse_scans(self.ed_scans.text()), append=True))
         b_src.clicked.connect(self._show_sources)
         for b in (b_load, b_add, b_src):
             row.addWidget(b)
         c.body.addLayout(row)
-        self.cb_mask = QtWidgets.QCheckBox("apply bad-pixel masks")
+        self.cb_mask = QtWidgets.QCheckBox("bad-pixel masks")
         self.cb_mask.setChecked(bool(getattr(self.cfg, "apply_mask", True)))
         self.cb_mask.setToolTip("Set pixels flagged in the detector / spectrometer mask (e.g. AGIPD image.mask,\n"
                                 "HIREX data.mask; mask > 0) to NaN so they are left out of every sum and mean.\n"
@@ -396,7 +398,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                                 "Changing it reads the loaded scans again.")
         self.cb_mask.toggled.connect(self._mask_toggled)
         c.body.addWidget(self.cb_mask)
-        self.cb_mask_pt = QtWidgets.QCheckBox("mask every frame (slower)")
+        self.cb_mask_pt = QtWidgets.QCheckBox("mask every frame (slow)")
         self.cb_mask_pt.setChecked(bool(getattr(self.cfg, "mask_per_train", False)))
         self.cb_mask_pt.setToolTip("Off (fast): the mask is read once per run, from its first trains, and a pixel\n"
                                    "flagged in more than half of those frames is left out everywhere.\n"
@@ -404,7 +406,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                                    "Changing it reads the loaded scans again.")
         self.cb_mask_pt.toggled.connect(self._mask_pt_toggled)
         c.body.addWidget(self.cb_mask_pt)
-        b_mask = QtWidgets.QPushButton("read the bad-pixel masks again")
+        b_mask = QtWidgets.QPushButton("Re-read masks")
         b_mask.setToolTip("The masks are read once for the experiment and kept in masks_<proposal>.npz in\n"
                           "the start folder. This deletes that file and reads the loaded scans again.")
         b_mask.clicked.connect(self._mask_reread)
@@ -420,18 +422,18 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         c.body.addWidget(self.cb_phot)
         v.addWidget(c)
 
-        c = Card("Scans (one delay each)")
+        c = Card("Scans")
         orow = QtWidgets.QHBoxLayout()
         orow.addWidget(_label("order by", "muted", wrap=False))
-        self.cmb_order = QtWidgets.QComboBox()
+        self.cmb_order = ShrinkCombo(120, 70)
         self.cmb_order.addItems(["delay", "run number", "as typed"])
         self.cmb_order.setToolTip("order of the rows in this table (the delay series is always sorted by delay)")
         self.cmb_order.currentTextChanged.connect(lambda *_: self._fill_scan_table())
         orow.addWidget(self.cmb_order, 1)
         c.body.addLayout(orow)
         rrow = QtWidgets.QHBoxLayout()
-        rrow.addWidget(_label("reference run", "muted", wrap=False))
-        self.cmb_ref = QtWidgets.QComboBox()
+        rrow.addWidget(_label("reference", "muted", wrap=False))
+        self.cmb_ref = ShrinkCombo(120, 70)
         self.cmb_ref.setToolTip("The only run whose images are all kept in memory: place the ROIs on it.\n"
                                 "The other runs are read in pieces and only their numbers are kept\n"
                                 "(ROI signals, peak positions, run average image), a few MB per run.")
@@ -444,7 +446,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.b_recalc.setVisible(False)
         c.body.addWidget(self.b_recalc)
         self.tbl = QtWidgets.QTableWidget(0, 5)
-        self.tbl.setHorizontalHeaderLabels(["use", "run", "delay (fs)", "shots", "kept"])
+        self.tbl.setHorizontalHeaderLabels(["", "run", "delay fs", "shots", "kept"])
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.tbl.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
@@ -457,31 +459,31 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._update_delay_label()
         v.addWidget(c)
 
-        c = Card("Shots and normalisation")
+        c = Card("Shots & normalisation")
         f = c.form()
         self.sp_mad = _spin(0, 50, 5, 0.5, 1)
         self.sp_mad.setToolTip("per-scan median/MAD cut on both diodes (0 = off)")
         self.sp_min = _spin(0, 1, 0.1, 0.05, 2)
         self.sp_min.setToolTip("drop shots with a diode below this fraction of its median (X-rays off)")
-        self.cmb_norm = QtWidgets.QComboBox()
+        self.cmb_norm = ShrinkCombo(140, 80)
         self.cmb_norm.addItems(list(an.NORMALISERS))
         self.cmb_norm.setCurrentText("pump^2 x probe")
-        self.cb_pos = QtWidgets.QCheckBox("drop shots with a diode ≤ 0")
+        self.cb_pos = QtWidgets.QCheckBox("drop diode ≤ 0")
         self.cb_pos.setChecked(True)
         self.cb_pos.setToolTip("Untick for monitors that can be negative (offset, negative-going signal,\n"
                                "spectrometer integral after baseline subtraction)")
         self.cb_pos.toggled.connect(self._schedule)
-        f.addRow("MAD cut (σ)", self.sp_mad)
-        f.addRow("min diode / median", self.sp_min)
+        f.addRow("MAD cut σ", self.sp_mad)
+        f.addRow("min / median", self.sp_min)
         f.addRow("", self.cb_pos)
-        f.addRow("normalise by", self.cmb_norm)
+        f.addRow("normalise", self.cmb_norm)
         self.lbl_cuts = _label("", "muted")
         self.lbl_cuts.setToolTip("A cut that would remove every shot of a scan is skipped for that scan")
         f.addRow(self.lbl_cuts)
         for w in (self.sp_mad, self.sp_min):
             w.valueChanged.connect(self._schedule)
         self.cmb_norm.currentTextChanged.connect(self._schedule)
-        b_csv = QtWidgets.QPushButton("Export delay series (CSV)")
+        b_csv = QtWidgets.QPushButton("Export CSV")
         b_csv.clicked.connect(self._export)
         c.body.addWidget(b_csv)
         v.addWidget(c)
@@ -495,7 +497,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         sc = QtWidgets.QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(side)
-        sc.setMinimumWidth(320)
+        sc.setMinimumWidth(262)
+        sc.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         return sc
 
     def _build_detectors(self):
@@ -616,6 +619,24 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def _build_delay(self):
         w = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(w)
+        row = QtWidgets.QHBoxLayout()
+        self.cb_bkg = QtWidgets.QCheckBox("subtract background ROI")
+        self.cb_bkg.setChecked(True)
+        self.cb_bkg.setToolTip("On: signal = ROI sum minus the ROI's pixels x the mean background-ROI pixel.\n"
+                               "Off: plain ROI sum. Applies to every page (delay series, correlations,\n"
+                               "parameter scan, fit).")
+        self.cb_bkg.toggled.connect(self._bkg_toggled)
+        row.addWidget(self.cb_bkg)
+        row.addWidget(_label("     x axis:", "muted", wrap=False))
+        self.cmb_xaxis = QtWidgets.QComboBox()
+        self.cmb_xaxis.addItems(["delay (one per run)", "another variable…"])
+        self.cmb_xaxis.setToolTip("another variable: plot the ROI signal against any recorded value\n"
+                                  "(a motor such as z, a temperature …), within one run or over several runs.\n"
+                                  "Opens the 'Parameter scan' page, where you paste its source and key.")
+        self.cmb_xaxis.activated.connect(self._xaxis_chosen)
+        row.addWidget(self.cmb_xaxis)
+        row.addStretch(1)
+        v.addLayout(row)
         g = _glw()
         self.p_raw = theme.style_plot(g.addPlot(row=0, col=0), "ROI signal (background subtracted)",
                                       "delay (fs)", "mean S (counts)")
@@ -744,6 +765,24 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             self.ed_pkey.setText(key)
             self.ed_plabel.setText(name.split(" (")[0])
             self.ed_punit.setText(unit)
+
+    def bkg_geoms(self, det):
+        """Background ROIs of a detector, or none when 'subtract background ROI' is off."""
+        if hasattr(self, "cb_bkg") and not self.cb_bkg.isChecked():
+            return []
+        return self.views[det].panel.background_geoms()
+
+    def _bkg_toggled(self, on):
+        theme.set_title(self.p_raw, "ROI signal (background subtracted)" if on else "ROI signal (no background subtraction)")
+        self.log(f"background subtraction {'on' if on else 'off'}")
+        self.recompute()
+
+    def _xaxis_chosen(self, i):
+        if i == 1:
+            self.set_param_visible(True)
+            self.ed_psrc.setFocus()
+            self.log("another variable: paste its source and key on the 'Parameter scan' page, then press Read")
+        self.cmb_xaxis.setCurrentIndex(0)
 
     def set_param_visible(self, on):
         on = bool(on)
@@ -905,14 +944,14 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         first_det = next(iter(self.views), None)
         if group == "all scans pooled":
             for label, det, roi in keys:
-                bkg = self.views[det].panel.background_geoms()
+                bkg = self.bkg_geoms(det)
                 sig = self._concat_over(use, lambda s: self.roi_values(det, s, roi, bkg))
                 dash = det != first_det
                 self._curve(self.pp_norm, *self._param_points(x, sig, nrm)[:3], roi.color, label, dash)
                 self._curve(self.pp_raw, *self._param_points(x, sig, None)[:3], roi.color, label, dash)
         elif sel is not None:
             _, det, roi = sel
-            bkg = self.views[det].panel.background_geoms()
+            bkg = self.bkg_geoms(det)
             if group == "one curve per scan":
                 groups = [(f"scan {s}", [s]) for s in use]
             else:
@@ -933,7 +972,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             self._curve(self.pp_int, *self._param_points(x, val, None)[:3], color, arm)
         if sel is not None:
             _, det, roi = sel
-            bkg = self.views[det].panel.background_geoms()
+            bkg = self.bkg_geoms(det)
             sig = self._concat_over(use, lambda s: self.roi_values(det, s, roi, bkg))
             self._scatter(self.pp_shot, x, sig, self._delay_colors_over(use), f"{roi.name}: kept shots",
                           with_r=False)
@@ -1510,7 +1549,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         norm = self.cmb_norm.currentText()
         delays = [self.scans[s].delay for s in scans]
         for label, det, roi in self.signal_keys():
-            bkg = self.views[det].panel.background_geoms()
+            bkg = self.bkg_geoms(det)
             sig = [self.roi_values(det, s, roi, bkg)[self.keep[s]] for s in scans]
             nrm = [an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe'))[self.keep[s]] for s in scans]
             ones = [np.ones_like(x) for x in sig]
@@ -1603,7 +1642,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         if sel is None or not self.sorted_scans():
             return
         _, det, roi = sel
-        bkg = self.views[det].panel.background_geoms()
+        bkg = self.bkg_geoms(det)
         sig = self._concat(lambda s: self.roi_values(det, s, roi, bkg))
         nrm_name = self.cmb_norm.currentText()
         nrm = self._concat(lambda s: an.normaliser(nrm_name, self.inten(s, 'pump'), self.inten(s, 'probe')))
