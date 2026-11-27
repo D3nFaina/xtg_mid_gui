@@ -630,6 +630,16 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                                 "Applies to every page (delay series, correlations, parameter scan, fit).")
         self.cmb_bkg.activated.connect(lambda *_: self._bkg_changed())
         row.addWidget(self.cmb_bkg)
+        row.addWidget(_label("   ROI value:", "muted", wrap=False))
+        self.cmb_value = QtWidgets.QComboBox()
+        self.cmb_value.addItems(["sum", "mean per pixel"])
+        self.cmb_value.setToolTip("sum: all ROI pixels added up (bigger ROI = bigger number).\n"
+                                  "mean per pixel: that sum divided by the ROI's pixel count (masked pixels\n"
+                                  "not counted), so ROIs of different size can be compared directly.\n"
+                                  "Applies to every page.")
+        self.cmb_value.activated.connect(lambda *_: (self.log(f"ROI value: {self.cmb_value.currentText()}"),
+                                                     self.recompute()))
+        row.addWidget(self.cmb_value)
         self.lbl_bkgwarn = _label("", wrap=False)
         self.lbl_bkgwarn.setStyleSheet("color:#e0a030; font-weight:600")
         row.addWidget(self.lbl_bkgwarn)
@@ -813,7 +823,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.lbl_bkgwarn.setText("  " + txt if txt else "")
         titles = {"roi": "ROI signal (background ROI subtracted)", "none": "ROI signal (no background subtraction)",
                   "run": f"ROI signal minus run {run}"}
-        theme.set_title(self.p_raw, titles[mode])
+        theme.set_title(self.p_raw, titles[mode] + (" · per pixel" if self.per_pixel() else ""))
+        self.p_raw.setLabel("left", "mean S per pixel (counts)" if self.per_pixel() else "mean S (counts)")
 
     def _bkg_changed(self):
         mode, run = self.bkg_mode()
@@ -1470,6 +1481,26 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 self._cache[key] = v
             else:
                 self._cache[key] = an.roi_signal(d.images[det], roi.geometry(), bkg)
+        v = self._cache[key]
+        if self.per_pixel():
+            n = self._roi_npx(det, scan, roi)
+            v = v / n if n else np.full(len(v), np.nan)
+        return v
+
+    def per_pixel(self):
+        return hasattr(self, "cmb_value") and self.cmb_value.currentIndex() == 1
+
+    def _roi_npx(self, det, scan, roi):
+        """Pixels of the ROI that are ever finite in this scan (masked / gap pixels do not count)."""
+        key = ("npx", det, scan, roi.geometry())
+        if key not in self._cache:
+            d = self.scans[scan]
+            if det in d.stats:
+                from .reduce import geom_key
+                n = d.stats[det].npx.get(geom_key(roi.geometry()), 0)
+            else:
+                n = an.roi_stats(d.images[det], roi.geometry())[1]
+            self._cache[key] = n
         return self._cache[key]
 
     # ------------------------------------------------------------ reference run / light runs

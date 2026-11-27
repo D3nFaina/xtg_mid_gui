@@ -335,3 +335,21 @@ def test_background_run_and_flag():
     assert "≥ 0" in w.lbl_bkgwarn.text()
     labels = [k[0] for k in w.signal_keys()]
     assert not any("Jungfrau" in l for l in labels) and len(set(labels)) == len(labels)
+
+
+def test_roi_value_per_pixel():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui import analysis as an
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    w = XTGMidWindow(sim_kw=dict(n_shots=20))
+    w.load([101, 102])
+    det = next(iter(w.views))
+    roi = w.views[det].panel.signal_rois()[0]
+    bkg = w.bkg_geoms(det)
+    tot = {s: w.roi_values(det, s, roi, bkg) for s in (101, 102)}
+    w.cmb_value.setCurrentIndex(1)
+    npx = an.roi_stats(w.scans[101].images[det], roi.geometry())[1]
+    assert npx > 0 and np.allclose(w.roi_values(det, 101, roi, bkg), tot[101] / npx)
+    assert np.allclose(w.roi_values(det, 102, roi, bkg), tot[102] / npx)       # light run: same pixel count
