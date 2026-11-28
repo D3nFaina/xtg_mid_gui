@@ -74,3 +74,47 @@ def test_only_one_detector(app):
     w.set_detector_used("jf2", True)
     assert w.cfg.use_detectors == [] and {v["det"] for v in w.series.values()} == {"jf1", "jf2"}
     w.close()
+
+
+def test_fit_page_reads_saved_file_and_compare(app, tmp_path):
+    from xtg_mid_gui.analysis import normalise_trace
+    w = XTGMidWindow(sim_kw=dict(n_shots=12))
+    w.load(w.backend.scans()[:20])
+    p = tmp_path / "a.h5"
+    w.export_h5(p)
+    fp = w.fit_page
+    assert fp.add_file(p) and fp.from_file()
+    assert [fp.cmb_det.itemText(i) for i in range(fp.cmb_det.count())] == ["Jung_diffraction", "Jung_transmission"]
+    fp.cmb_det.setCurrentText("Jung_transmission")
+    fp.cmb_roi.setCurrentText("Bragg 2")
+    t, y, e = fp.data(in_range=False)
+    s = w.series["Bragg 2"]["norm"]
+    assert len(t) == len(s[0]) and np.allclose(t, np.asarray(s[0]) / 1000)
+    assert fp.run_fit(True).success
+    w.load([101, 102])                                     # the file stays the fit source
+    assert fp.from_file() and len(fp.data(in_range=False)[0]) == len(s[0])
+
+    cp = fp.compare
+    assert cp.add_current(all_rois=True) == 3              # session, Jung_diffraction
+    cp.add_file(p)
+    cp.cmb_det.setCurrentText("Jung_diffraction")
+    cp.cmb_roi.setCurrentText("Bragg")
+    assert cp.add_current() == 1 and len(cp.traces) == 4
+    cp.cmb_mode.setCurrentIndex(1)
+    for _, t, y, e, _ in cp.curves():
+        assert np.nanmin(y) == pytest.approx(0) and np.nanmax(y) == pytest.approx(1)
+    cp.cmb_mode.setCurrentIndex(2)
+    cp.sp_t1.setValue(0)
+    cp.sp_t2.setValue(400)
+    for _, t, y, e, _ in cp.curves():
+        m = (t >= 0) & (t <= 400)
+        assert np.nanmax(y[m]) == pytest.approx(1)
+    cp.cmb_mode.setCurrentIndex(0)
+    raw = cp.curves()[-1][2]
+    assert np.allclose(raw, cp.traces[-1]["norm"][1])
+    cp.lst.item(0).setSelected(True)
+    cp.remove_selected()
+    assert len(cp.traces) == 3
+    y, e, k = normalise_trace([0, 1], [1, 2], [0.1, 0.1], 2, (5, 6))
+    assert np.isnan(y).all()
+    w.close()

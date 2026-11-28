@@ -141,6 +141,14 @@ f = h5py.File("xtg_11456_reduced.h5")
 delay, inten, err, n = f["Jung_diffraction/Bragg/trace"][()].T
 ```
 
+## Fitting saved files and comparing traces
+
+- **Fitting → Fit**: "data from" is the live session or a saved file (**Open file…**); for a
+  file choose the detector and the ROI curve, then fit as before.
+- **Fitting → Compare traces**: add traces from the session (a snapshot) or from saved files,
+  tick / untick / remove them, and show them plain, normalised 0 to 1, or each divided by its
+  maximum inside a delay range (type it or drag the shaded band).
+
 ## Detectors
 
 Jungfrau 1 is called **Jung_diffraction** and Jungfrau 2 **Jung_transmission** (old sources
