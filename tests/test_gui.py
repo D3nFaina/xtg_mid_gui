@@ -313,7 +313,7 @@ def test_background_toggle_and_xaxis():
     assert np.allclose(no_bkg, w.scans[102].stats[det].sums[__import__("xtg_mid_gui.reduce", fromlist=["x"]).geom_key(roi.geometry())])
     w.cmb_xaxis.activated.emit(1)
     assert w.tabs.isTabVisible(w.param_tab) and w.cmb_xaxis.currentIndex() == 0
-    assert w.sidebar.widget().minimumSizeHint().width() <= 262
+    assert w.sidebar_scroll.widget().minimumSizeHint().width() <= 262
 
 
 def test_background_run_and_flag():
@@ -436,3 +436,17 @@ def test_jungfrau_burst_mode_flag():
     w._update_cells_flag()
     assert w.pill_cells.isVisibleTo(w) and "1 run" in w.pill_cells.text() and "run 102" in w.pill_cells.toolTip()
     w.close()
+
+
+def test_log_on_top_threshold_and_runs_table(win):
+    from xtg_mid_gui import runtable
+    assert win.log_box.isVisibleTo(win.sidebar) and not win.sidebar_scroll.isAncestorOf(win.log_box)
+    win.cb_pos.setChecked(True)
+    win.sp_pos.setValue(1e5)                      # above every simulated diode value: cut skipped, not applied
+    win.recompute()
+    assert "diode <= 100000" in win.lbl_cuts.text()
+    win.sp_pos.setValue(0)
+    win.recompute()
+    win.write_runtable()
+    t = runtable.load(win.cfg.proposal)
+    assert set(win.scans) <= set(t) and all(t[s]["rois"] for s in win.scans)

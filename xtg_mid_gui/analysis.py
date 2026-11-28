@@ -127,8 +127,9 @@ def robust_mask(x, nmad=5.0) -> np.ndarray:
     return ok & (np.abs(x - med) <= nmad * mad)
 
 
-def clean_scan(pump, probe, nmad=5.0, min_frac=0.0, positive=True, report=None) -> np.ndarray:
-    """Keep shots with finite diodes, (optionally) positive diodes, inside the MAD cut,
+def clean_scan(pump, probe, nmad=5.0, min_frac=0.0, positive=True, report=None,
+               threshold=0.0) -> np.ndarray:
+    """Keep shots with finite diodes, (optionally) diodes above `threshold`, inside the MAD cut,
     and above min_frac x median (drops X-ray-off shots).
 
     A cut that would remove EVERY shot of the scan is not applied (e.g. diodes that are
@@ -154,7 +155,7 @@ def clean_scan(pump, probe, nmad=5.0, min_frac=0.0, positive=True, report=None) 
 
     with np.errstate(invalid="ignore"):
         if positive:
-            apply("diode <= 0", (pump > 0) & (probe > 0))
+            apply(f"diode <= {threshold:g}", (pump > threshold) & (probe > threshold))
         if nmad > 0:
             apply("MAD", robust_mask(pump, nmad) & robust_mask(probe, nmad))
         if min_frac > 0:
