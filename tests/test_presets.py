@@ -62,9 +62,9 @@ def test_agipd_layout_and_stack():
     per = {t: np.arange(3 * 512 * 128, dtype=np.float32).reshape(3, 512, 128) + t for t in (15, 8)}
     st = agipd.stack(per, [15, 8])
     assert st.shape == (3,) + agipd.stack_shape([8, 15]) == (3, 2 * 128 + agipd.STACK_GAP, 512)
-    assert st[1, 0, 7] == per[8][1, 7, 0]           # tile drawn transposed, ascending tile number
+    assert st[1, 0, 7] == per[15][1, 7, 0]          # tile drawn transposed, in the order given (15 on top)
     assert np.isnan(st[0, 130]).all()
-    assert agipd.parse_tiles("15, 8 3-4 99") == [3, 4, 8, 15]
+    assert agipd.parse_tiles("15, 8 3-4 99 8") == [15, 8, 3, 4]      # order kept: top to bottom
 
 
 def test_roi_on_tile_gap_counts_only_real_pixels():

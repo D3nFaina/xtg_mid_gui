@@ -210,13 +210,16 @@ def test_7016_tile_choice_keeps_rois_on_their_tiles(win7016):
     panel = w.views["agipd_sub"].panel
     bragg = next(r for r in panel.rois if "Bragg" in r.name)
     y0 = bragg.geometry()[1]
-    w.mosaic.toggle_tile(3)                      # click on tile 3 in the all-tiles view
-    assert w.mosaic.chosen() == [3, 8, 10, 15]
+    w.mosaic.toggle_tile(3)                      # click on tile 3 in the all-tiles view: added at the bottom
+    assert w.mosaic.chosen() == [8, 10, 15, 3]
     w.mosaic.b_apply.click()
-    assert w.cfg.detectors["agipd_sub"].tiles == [3, 8, 10, 15]
+    assert w.cfg.detectors["agipd_sub"].tiles == [8, 10, 15, 3]
     assert w.views["agipd_sub"]._raw.shape[0] == 4 * 128 + 3 * 8
-    assert bragg.geometry()[1] == pytest.approx(y0 + 136)      # tile 15 moved down one slot
-    w.mosaic.toggle_tile(3)
+    assert bragg.geometry()[1] == pytest.approx(y0)            # tile 15 still third from the top
+    w.mosaic.ed_tiles.setText("15 8 10 3")       # stacked in the order typed
+    w.mosaic.b_apply.click()
+    assert bragg.geometry()[1] == pytest.approx(y0 - 2 * 136)  # tile 15 now on top
+    w.mosaic.ed_tiles.setText("8 10 15")
     w.mosaic.b_apply.click()
     assert bragg.geometry()[1] == pytest.approx(y0)
 
@@ -353,3 +356,27 @@ def test_roi_value_per_pixel():
     npx = an.roi_stats(w.scans[101].images[det], roi.geometry())[1]
     assert npx > 0 and np.allclose(w.roi_values(det, 101, roi, bkg), tot[101] / npx)
     assert np.allclose(w.roi_values(det, 102, roi, bkg), tot[102] / npx)       # light run: same pixel count
+
+
+def test_background_trace_and_hiding_rescales(win):
+    w = win
+    w.recompute()
+    assert any(k.startswith("bkg: ") for k in w.bkg_series)
+    names = [i.name() for i in w.p_raw.listDataItems()]
+    assert any(n.startswith("bkg: ") for n in names)
+    vb = w.p_raw.getViewBox()
+    keep = "TG +1"
+    for it in w.p_raw.listDataItems():
+        if it.name() != keep:
+            it.setVisible(False)                 # = clicking its legend entry
+            assert not it._eb.isVisible()
+    vb.updateAutoRange()
+    top = vb.viewRange()[1][1]
+    s = w.series[keep]["raw"]
+    assert top < 1.3 * np.nanmax(np.asarray(s[1]) + np.asarray(s[2]))
+    assert [i.isVisible() for i in w.p_norm.listDataItems()].count(True) == 1
+    w.recompute()                                 # stays hidden after a redraw
+    assert [i.isVisible() for i in w.p_raw.listDataItems()].count(True) == 1
+    for it in w.p_raw.listDataItems():
+        it.setVisible(True)
+    assert not w._hidden
