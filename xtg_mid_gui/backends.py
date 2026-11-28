@@ -67,6 +67,7 @@ class ScanData:
 
 class Backend:
     name = "base"
+    read_overview = True            # False: the reference run skips the all-tiles AGIPD view (kept by the GUI)
 
     def __init__(self, cfg: SourceConfig):
         self.cfg = cfg
@@ -166,7 +167,7 @@ class SimulatedBackend(Backend):
         images, overview = {}, {}
         for det, d in self.cfg.detectors.items():
             if d.kind == "agipd_overview":
-                if rois is None:
+                if rois is None and self.read_overview:
                     overview = self._agipd_overview(rng, pump, probe, resp)
                 continue
             if (rois is not None and det not in rois) or not self.cfg.active(det):   # not asked for
@@ -510,7 +511,7 @@ class ExtraDataBackend(Backend):
         tile_parts = {}
         for name, det in cfg.detectors.items():
             if det.kind == "agipd_overview":
-                if rois is not None:                              # light run: the all-tiles view uses the reference run
+                if rois is not None or not self.read_overview:    # light run: the all-tiles view uses the reference run
                     continue
                 for t in det.tiles:
                     try:

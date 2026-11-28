@@ -677,7 +677,11 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 d.tiles = list(tiles)
         self.log(f"AGIPD tiles to analyse: {' '.join(map(str, tiles))}")
         if self.scans:
-            self.reload_scans()
+            self._keep_overview = {s: d.overview for s, d in self.scans.items() if d.overview}
+            try:
+                self.reload_scans()
+            finally:
+                self._keep_overview = {}
 
     def _move_rois_with_tiles(self, det, old_tiles, new_tiles):
         """Keep each ROI on the same AGIPD tile when the stack of analysed tiles changes."""
@@ -1383,8 +1387,15 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._typed_order = list(dict.fromkeys((list(getattr(self, '_typed_order', [])) if append else []) + list(scans)))
         scans = sorted(scans, key=lambda s: s != self.ref_scan)    # reference first: it places the ROIs
         ref = [s for s in scans if s == self.ref_scan]
-        for s, d in load_many(self.backend, [(s, None) for s in ref]):
-            self._add_loaded(s, d, known)
+        keep = getattr(self, "_keep_overview", {})             # new AGIPD tiles: the all-tiles view stays
+        self.backend.read_overview = not any(s in keep for s in ref)
+        try:
+            for s, d in load_many(self.backend, [(s, None) for s in ref]):
+                if not isinstance(d, Exception) and s in keep:
+                    d.overview = keep[s]
+                self._add_loaded(s, d, known)
+        finally:
+            self.backend.read_overview = True
         self._ensure_rois()
         self._cache_reference()
         rest = [s for s in scans if s != self.ref_scan]

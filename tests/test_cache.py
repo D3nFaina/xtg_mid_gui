@@ -121,3 +121,21 @@ def test_gui_uses_cache_and_remembers_rois():
 def pg_point(x, y):
     from pyqtgraph.Qt import QtCore
     return QtCore.QPointF(x, y)
+
+
+def test_mean_image_follows_a_file_rewritten_by_a_worker():
+    """Real data: worker processes rewrite the cache files; the GUI process must not keep
+    showing the mean images it had read before (new AGIPD tiles showed the old ones)."""
+    sys.path.insert(0, os.path.dirname(__file__))
+    from _par_backend import ParBackend
+    from xtg_mid_gui.config import config_for
+    cfg = config_for("7016")
+    det = next(n for n, d in cfg.detectors.items() if d.kind == "agipd_tiles")
+    be = ParBackend(cfg)
+    for tiles in ([8, 10, 15], [9, 8, 15]):
+        cfg.detectors[det].tiles = tiles
+        out = dict(compute.ensure_many(be, [101, 102], {}, workers=2))
+        for s in (101, 102):
+            got = store.load_light(out[s]["path"]).mean_image(det)
+            ref = be.load_scan(s, rois=compute.full_rois(cfg)).mean_image(det)      # read here
+            assert np.allclose(got, ref, atol=1e-4, equal_nan=True), (tiles, s)
