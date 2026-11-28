@@ -20,7 +20,7 @@ from pyqtgraph.Qt import QtCore, QtWidgets
 from . import agipd
 from . import delays as delay_file
 from . import analysis as an
-from . import compute, roidb, store, theme
+from . import compute, roidb, runtable, store, theme
 from .backends import ScanData, load_many, make_backend, parse_scans
 from .config import PARAM_PRESETS, PRESET_DIR, PRESETS, Source, SourceConfig, config_for, mask_key_for
 from .fitpage import FitPage
@@ -550,14 +550,26 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.cmb_norm = ShrinkCombo(140, 80)
         self.cmb_norm.addItems(list(an.NORMALISERS))
         self.cmb_norm.setCurrentText("pump^2 x probe")
-        self.cb_pos = QtWidgets.QCheckBox("drop diode ≤ 0")
+        self.cb_pos = QtWidgets.QCheckBox("drop diode ≤")
         self.cb_pos.setChecked(True)
-        self.cb_pos.setToolTip("Untick for monitors that can be negative (offset, negative-going signal,\n"
+        self.cb_pos.setToolTip("Drop shots where the pump or the probe diode is at or below this value.\n"
+                               "Untick for monitors that can be negative (offset, negative-going signal,\n"
                                "spectrometer integral after baseline subtraction)")
         self.cb_pos.toggled.connect(self._schedule)
+        self.sp_pos = _spin(-1e6, 1e6, 0, 0.1, 3)
+        self.sp_pos.setMinimumWidth(60)
+        self.sp_pos.setMaximumWidth(90)
+        self.sp_pos.setToolTip("diode threshold, in the diode's own units (0 = drop non-positive shots)")
+        self.sp_pos.valueChanged.connect(self._schedule)
+        self.cb_pos.toggled.connect(self.sp_pos.setEnabled)
+        pos_row = QtWidgets.QHBoxLayout()
+        pos_row.setContentsMargins(0, 0, 0, 0)
+        pos_row.addWidget(self.cb_pos)
+        pos_row.addWidget(self.sp_pos)
+        pos_row.addStretch(1)
         f.addRow("MAD cut σ", self.sp_mad)
         f.addRow("min / median", self.sp_min)
-        f.addRow("", self.cb_pos)
+        f.addRow(pos_row)
         f.addRow("normalise", self.cmb_norm)
         self.cmb_normroi = ShrinkCombo(140, 80)
         self.cmb_normroi.addItem("none")
@@ -603,18 +615,26 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._autosave_timer.timeout.connect(lambda: self.export_now(ask=False, auto=True))
         v.addWidget(c)
 
-        c = Card("Log")
-        self.log_box = QtWidgets.QPlainTextEdit(readOnly=True)
-        self.log_box.setMaximumHeight(130)
-        c.body.addWidget(self.log_box)
-        v.addWidget(c)
         v.addStretch(1)
-        sc = QtWidgets.QScrollArea()
+        sc = self.sidebar_scroll = QtWidgets.QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(side)
         sc.setMinimumWidth(262)
         sc.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        return sc
+        # the log sits above the scrolling cards, so it is always in view
+        col = QtWidgets.QWidget(objectName="sidebar")
+        cv = QtWidgets.QVBoxLayout(col)
+        cv.setContentsMargins(6, 6, 6, 0)
+        cv.setSpacing(4)
+        c = Card("Log")
+        self.log_box = QtWidgets.QPlainTextEdit(readOnly=True)
+        self.log_box.setFixedHeight(84)
+        self.log_box.setLineWrapMode(QtWidgets.QPlainTextEdit.WidgetWidth)
+        self.log_box.setToolTip("Messages of this session, newest at the bottom")
+        c.body.addWidget(self.log_box)
+        cv.addWidget(c)
+        cv.addWidget(sc, 1)
+        return col
 
     def _build_detectors(self):
         page = QtWidgets.QWidget()
@@ -1322,7 +1342,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
 
     # ============================================================ loading
     def log(self, msg):
-        self.log_box.appendPlainText(msg)
+        self.log_box.appendPlainText(time.strftime("%H:%M:%S ") + msg)
+        self.log_box.verticalScrollBar().setValue(self.log_box.verticalScrollBar().maximum())
         self.statusBar().showMessage(msg, 5000)
 
     def _preset_chosen(self, *_):
@@ -1425,8 +1446,11 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._fill_bkg_combo()
         self._update_delay_label()
         n_file = sum(self.scans[s].delay_from == "file" for s in scans if s in self.scans)
-        if n_file:
-            self.log(f"{n_file} delays filled in from {self.delays_path().name}")
+        dp = self.delays_path()
+        if not dp.is_file():
+            self.log(f"no delays file {dp} (delays from the data)")
+        else:
+            self.log(f"{n_file} of {len(scans)} delays filled in from {dp}")
         self._fill_scan_table()
         self._fill_sources()
         self._update_cells_flag()
@@ -1525,6 +1549,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         except OSError as e:
             self.log(f"could not save {self.delays_path()}: {e}")
         self._update_delay_label()
+        self.write_runtable([s])
 
     def _fill_sources(self):
         for det, view in self.panes().items():
@@ -1821,12 +1846,26 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         else:
             self.log(f"ROIs could not be saved to {roidb.path_for(self.cfg.proposal)}")
         self._fill_roirun_combo()
+        self.write_runtable()
+
+    def write_runtable(self, runs=None):
+        """Update runs_<proposal>.csv (run, delay and its origin, trains, ROIs, tiles, time)."""
+        runs = sorted(self.scans) if runs is None else runs
+        if not runs:
+            return
+        det_rois, tiles = self.det_rois(), self.agipd_tiles()
+        rows = {s: dict(delay_fs=self.scans[s].delay, delay_from=self.scans[s].delay_from,
+                        n_trains=self.scans[s].n, det_rois=det_rois, tiles=tiles) for s in runs}
+        if not runtable.update(self.cfg.proposal, rows):
+            self.log(f"could not write {runtable.path_for(self.cfg.proposal)}")
 
     def _restore_rois(self):
         e = roidb.entry(self.cfg.proposal)
         if e.get("detectors"):
             self._apply_saved(e, reload=False)
-            self.log(f"ROIs of the last session restored ({roidb.path_for(self.cfg.proposal).name})")
+            self.log(f"ROIs of the last session restored ({roidb.path_for(self.cfg.proposal)})")
+        else:
+            self.log(f"no saved ROIs in {roidb.path_for(self.cfg.proposal)}")
         self._fill_roirun_combo()
 
     def _apply_saved(self, e, reload=True):
@@ -1943,7 +1982,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         for s in scans:
             r = {}
             self.keep[s] = an.clean_scan(self.inten(s, 'pump'), self.inten(s, 'probe'), self.sp_mad.value(),
-                                         self.sp_min.value(), self.cb_pos.isChecked(), report=r)
+                                         self.sp_min.value(), self.cb_pos.isChecked(), report=r,
+                                         threshold=self.sp_pos.value())
             for k, v in r["cut"].items():
                 cut[k] = cut.get(k, 0) + v
             for k in r["skipped"]:
@@ -2539,6 +2579,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         meta = dict(proposal=int(self.cfg.proposal or 0), normalisation=self.norm_label(),
                     mad_cut=float(self.sp_mad.value()), min_over_median=float(self.sp_min.value()),
                     drop_nonpositive=int(self.cb_pos.isChecked()),
+                    diode_threshold=float(self.sp_pos.value()),
                     background=f"run {brun}" if mode == "run" else mode, roi_value=self.cmb_value.currentText(),
                     intensity_from=self.cfg.intensity_from, software="xtg_mid_gui")
         export.write(path, meta, runs, dets)

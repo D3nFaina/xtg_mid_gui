@@ -180,3 +180,26 @@ def test_reduce_pulses_single_cell_and_scale():
     assert np.allclose(r[1], a[1, 0] * 2 + 1)
     b = np.arange(2 * 3 * 2, dtype=np.uint16).reshape(2, 3, 2)
     assert np.allclose(reduce_pulses(b, Source("s", "k"), 1), b.mean(axis=1))
+
+
+def test_clean_scan_threshold():
+    pump = np.array([0.5, 1.5, 2.0, 3.0, 0.1, 2.5])
+    probe = np.ones(6) * 2
+    r = {}
+    keep = an.clean_scan(pump, probe, nmad=0, min_frac=0, threshold=1.0, report=r)
+    assert keep.tolist() == [False, True, True, True, False, True] and r["cut"]["diode <= 1"] == 2
+    keep = an.clean_scan(pump - 5, probe - 5, nmad=0, min_frac=0, threshold=-4.0)
+    assert keep.tolist() == [False, True, True, True, False, True]
+
+
+def test_runtable_merges_rows(tmp_path, monkeypatch):
+    from xtg_mid_gui import runtable
+    monkeypatch.setenv("XTG_MID_START_DIR", str(tmp_path))
+    roi = dict(name="TG", shape="ellipse", center=[10, 20], radii=[3, 4], background=False, enabled=True)
+    assert runtable.update(11456, {7: dict(delay_fs=1500.0, delay_from="typed", n_trains=144,
+                                           det_rois={"jf1": [roi]})})
+    assert runtable.update(11456, {8: dict(delay_fs=np.nan, delay_from="data", n_trains=10, det_rois={})})
+    t = runtable.load(11456)
+    assert sorted(t) == [7, 8] and t[7]["delay_fs"] == "1500" and t[7]["delay_from"] == "typed"
+    assert "jf1: TG ellipse (10.0,20.0)" in t[7]["rois"] and t[8]["delay_fs"] == ""
+    assert (tmp_path / "runs_11456.csv").is_file()
