@@ -425,3 +425,14 @@ def test_normalise_by_bragg_roi():
     w.recompute()
     assert w.norm_label() == "pump^2"
     w.close()
+
+
+def test_jungfrau_burst_mode_flag():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841
+    w = XTGMidWindow(sim_kw=dict(n_shots=10))
+    w.load([101, 102])
+    assert not w.pill_cells.isVisibleTo(w)
+    w.scans[102].notes.append("WARNING jf1: 16 memory cells per train (burst mode?), 1 expected; averaged over cells 'all'")
+    w._update_cells_flag()
+    assert w.pill_cells.isVisibleTo(w) and "1 run" in w.pill_cells.text() and "run 102" in w.pill_cells.toolTip()
+    w.close()

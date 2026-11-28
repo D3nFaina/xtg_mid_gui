@@ -319,6 +319,7 @@ def reduce_pulses(a: np.ndarray, src: Source, image_ndim: int = 0) -> np.ndarray
 
 
 CHUNK = 32                     # trains read at a time from the run files
+CELLS_FLAG = "WARNING"         # start of the note when a Jungfrau has more than one memory cell
 
 
 def per_train_mean(tids, arr):
@@ -500,8 +501,13 @@ class ExtraDataBackend(Backend):
             kd = run[src.source, src.key]
             parts_t, parts_a = [], []
             chunks = kd.split_trains(trains_per_part=CHUNK) if hasattr(kd, "split_trains") else [kd]
+            flagged = False
             for ch in chunks:                                     # chunks keep the memory low
                 a = np.asarray(ch.ndarray(), np.float32)
+                if not flagged and a.ndim == 4 and a.shape[1] > 1:
+                    flagged = True                                # Jungfrau: 1 cell per train expected
+                    notes.append(f"{CELLS_FLAG} {name}: {a.shape[1]} memory cells per train (burst mode?), "
+                                 f"1 expected; averaged over cells '{src.pulses}'")
                 a = masked(name, ch, a, src.source, src.key, det.mask_key)
                 if np.isfinite(E_ph):
                     a = photonize(a, E_ph)
