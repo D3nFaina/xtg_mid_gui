@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import sys
 import time
 import warnings
@@ -431,6 +432,20 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                                 "Changing it reads the loaded scans again.")
         self.cb_phot.toggled.connect(self._photonize_toggled)
         c.body.addWidget(self.cb_phot)
+        self.cb_dets = {}
+        if len(self.cfg.image_detectors()) > 1:
+            drow = QtWidgets.QVBoxLayout()
+            drow.addWidget(_label("detectors used", "muted", wrap=False))
+            for det, d in self.cfg.image_detectors().items():
+                cb = QtWidgets.QCheckBox(d.label)
+                cb.setChecked(self.cfg.active(det))
+                cb.setToolTip("Read, analyse and export this detector. Untick a detector that is not used\n"
+                              "in these runs (it is then not read at all). Changing it reads the scans again\n"
+                              "(from the cache where possible).")
+                cb.toggled.connect(lambda on, det=det: self.set_detector_used(det, on))
+                self.cb_dets[det] = cb
+                drow.addWidget(cb)
+            c.body.addLayout(drow)
         v.addWidget(c)
 
         c = Card("Scans")
@@ -505,9 +520,35 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         for w in (self.sp_mad, self.sp_min):
             w.valueChanged.connect(self._schedule)
         self.cmb_norm.currentTextChanged.connect(self._schedule)
-        b_csv = QtWidgets.QPushButton("Export CSV")
-        b_csv.clicked.connect(self._export)
-        c.body.addWidget(b_csv)
+        v.addWidget(c)
+
+        c = Card("Export (.h5)")
+        frow = QtWidgets.QHBoxLayout()
+        self.ed_export = QtWidgets.QLineEdit(f"xtg_{self.cfg.proposal or 'custom'}_reduced.h5")
+        self.ed_export.setToolTip("File name for the reduced data (HDF5). A name without a folder goes into the\n"
+                                  "start folder. Per run: [delay, intensity, error] for every ROI, the diode and\n"
+                                  "spectrometer means with errors; per ROI: the delay trace. The Fitting page reads it.")
+        self.ed_export.editingFinished.connect(lambda: setattr(self, "_overwrite_ok", None))
+        frow.addWidget(self.ed_export, 1)
+        b_browse = QtWidgets.QPushButton("…")
+        b_browse.setToolTip("choose the file")
+        b_browse.clicked.connect(self._browse_export)
+        frow.addWidget(b_browse)
+        c.body.addLayout(frow)
+        erow = QtWidgets.QHBoxLayout()
+        b_exp = QtWidgets.QPushButton("Export", objectName="primary")
+        b_exp.clicked.connect(lambda: self.export_now(ask=True))
+        erow.addWidget(b_exp)
+        self.cb_autosave = QtWidgets.QCheckBox("auto-save")
+        self.cb_autosave.setToolTip("Write the file again after every computation (loading runs, new ROIs, new cuts\n"
+                                    "or normalisation), so it is never forgotten. The first time it would replace an\n"
+                                    "existing file you are asked once; after that the same file is overwritten.")
+        self.cb_autosave.toggled.connect(lambda on: on and self._autosave_timer.start())
+        erow.addWidget(self.cb_autosave)
+        erow.addStretch(1)
+        c.body.addLayout(erow)
+        self._autosave_timer = QtCore.QTimer(self, singleShot=True, interval=2000)
+        self._autosave_timer.timeout.connect(lambda: self.export_now(ask=False, auto=True))
         v.addWidget(c)
 
         c = Card("Log")
@@ -559,6 +600,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             view.source.currentIndexChanged.connect(lambda *_, det=det: self._draw_image(det))
             view.b_full.clicked.connect(lambda *_, det=det: self.toggle_full(det))
             self.views[det] = view
+            view.setVisible(self.cfg.active(det))
             w.addWidget(view)
         v.addWidget(w, 1)
         return page
@@ -923,6 +965,27 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         else:
             self.recompute()
 
+    def set_detector_used(self, det, on):
+        """Use one or both detectors (cfg.use_detectors; at least one stays on)."""
+        dets = list(self.cfg.image_detectors())
+        use = set(self.cfg.use_detectors or dets)
+        use = use | {det} if on else use - {det}
+        if not use:
+            self.log("at least one detector must stay on")
+            self.cb_dets[det].blockSignals(True)
+            self.cb_dets[det].setChecked(True)
+            self.cb_dets[det].blockSignals(False)
+            return
+        self.cfg.use_detectors = [] if use == set(dets) else [d for d in dets if d in use]
+        if det in self.cb_dets and self.cb_dets[det].isChecked() != on:
+            self.cb_dets[det].setChecked(on)
+        self.views[det].setVisible(on)
+        self.log(f"detectors: {', '.join(self.cfg.detectors[d].label for d in dets if self.cfg.active(d))}")
+        if self.scans:
+            self.reload_scans()
+        else:
+            self.recompute()
+
     def _mask_toggled(self, on):
         self.cfg.apply_mask = bool(on)
         self.log(f"bad-pixel masks {'on' if on else 'off'}")
@@ -1266,7 +1329,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         """{detector: (all ROI geometries, background geometries)} for reducing the runs
         that are not the reference run (switched-off ROIs too, so ticking them is free)."""
         return {det: ([r.geometry() for r in v.panel.rois], v.panel.background_geoms())
-                for det, v in self.views.items()}
+                for det, v in self.views.items() if self.cfg.active(det)}
 
     def load(self, scans, append=False):
         self.cfg.proposal = self.sp_prop.value()
@@ -1604,7 +1667,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 continue
             did[info["did"]] = did.get(info["did"], 0) + 1
             try:
-                yield s, store.load_light(info["path"])
+                yield s, store.load_light(info["path"], detectors=list(self.cfg.active_image_detectors()))
             except Exception as e:      # noqa: BLE001 - reported by the caller
                 yield s, e
         words = {"cached": "from the cache", "rois": "new ROIs only", "read": "read"}
@@ -1696,7 +1759,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def signal_keys(self):
         """(label, detector, roi) for every signal ROI.  Label = the ROI name; only when two
         detectors have a ROI of the same name is a short detector tag added (JF1, JF2 …)."""
-        rois = [(det, r) for det, view in self.views.items() for r in view.panel.signal_rois()]
+        rois = [(det, r) for det, view in self.views.items() if self.cfg.active(det)
+                for r in view.panel.signal_rois()]
         count = {}
         for _, r in rois:
             count[r.name] = count.get(r.name, 0) + 1
@@ -1704,7 +1768,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         for det, r in rois:
             label = r.name
             if count[r.name] > 1:
-                tag = self.cfg.detectors[det].label.replace("Jungfrau ", "JF").replace("Jungfrau", "JF")
+                tag = self.cfg.detectors[det].label.replace("Jung_", "").replace("Jungfrau ", "JF")
                 label = f"{r.name} [{tag}]"
             seen[label] = seen.get(label, 0) + 1
             if seen[label] > 1:                     # same name twice on one detector: keep both
@@ -1765,6 +1829,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                                         "other runs: only their numbers)")
         self._update_stale()
         self._update_bkg_flag()
+        if getattr(self, "cb_autosave", None) is not None and self.cb_autosave.isChecked() and self.series:
+            self._autosave_timer.start()
 
     def _compute_series(self, scans):
         """series[label] = dict(raw=(t, y, e, n), norm=(t, y, e, n), color)."""
@@ -1776,9 +1842,12 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             sig = [self.roi_values(det, s, roi, bkg)[self.keep[s]] for s in scans]
             nrm = [an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe'))[self.keep[s]] for s in scans]
             ones = [np.ones_like(x) for x in sig]
+            per_run = {s: dict(raw=(d, *an.ratio_of_means(a, o)[:2]), norm=(d, *an.ratio_of_means(a, b)[:2]))
+                       for s, d, a, o, b in zip(scans, delays, sig, ones, nrm)}
             self.series[label] = dict(raw=an.delay_series(delays, sig, ones),
                                       norm=an.delay_series(delays, sig, nrm), color=roi.color,
-                                      det=det, dash=det != next(iter(self.views)))
+                                      det=det, dash=det != next(iter(self.views)), per_run=per_run,
+                                      name=re.sub(r" \[[^\]]*\]", "", label))
 
     def _curve(self, p, t, y, e, color, name, dash=False):
         if len(t) == 0:
@@ -2079,7 +2148,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def _draw_image(self, det):
         view = self.views[det]
         scans = self.sorted_scans()
-        if not scans:
+        if not scans or not self.cfg.active(det):
             view.show_image(None)
             return
         s = view.source.currentData()
@@ -2125,11 +2194,89 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 for row in zip(t, y, e, yn, en, n):
                     w.writerow([label, *[f"{v:.6g}" for v in row]])
 
-    def _export(self):
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export", "xtg_delay_series.csv", "CSV (*.csv)")
+    def export_path(self):
+        from pathlib import Path
+        from .delays import start_dir
+        txt = self.ed_export.text().strip() or f"xtg_{self.cfg.proposal or 'custom'}_reduced.h5"
+        p = Path(txt).expanduser()
+        if p.suffix.lower() not in (".h5", ".hdf5"):
+            p = p.with_name(p.name + ".h5")
+        return p if p.is_absolute() else start_dir() / p
+
+    def _browse_export(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Reduced data file", str(self.export_path()),
+                                                        "HDF5 (*.h5 *.hdf5)",
+                                                        options=QtWidgets.QFileDialog.DontConfirmOverwrite)
         if path:
-            self.export_csv(path)
-            self.log(f"wrote {path}")
+            self.ed_export.setText(path)
+            self._overwrite_ok = None
+
+    def _confirm_overwrite(self, path, auto):
+        """Ask before replacing an existing file (once per file name for auto-save)."""
+        if not path.exists() or getattr(self, "_overwrite_ok", None) == str(path):
+            return True
+        text = (f"{path.name} already exists.\n\n"
+                + ("Overwrite it now and after every new computation (auto-save)?" if auto else "Overwrite it?"))
+        ans = self.ask_yes_no("Overwrite reduced data file", text)
+        if ans:
+            self._overwrite_ok = str(path)
+        elif auto:
+            self.cb_autosave.setChecked(False)
+            self.log("auto-save off: choose another file name, or tick auto-save again to be asked again")
+        return ans
+
+    def ask_yes_no(self, title, text):            # tests replace this
+        r = QtWidgets.QMessageBox.question(self, title, text, QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                                           QtWidgets.QMessageBox.No)
+        return r == QtWidgets.QMessageBox.Yes
+
+    def export_now(self, ask=True, auto=False):
+        if not self.series:
+            if not auto:
+                self.log("nothing to export: load runs first")
+            return None
+        path = self.export_path()
+        if not self._confirm_overwrite(path, auto):
+            return None
+        try:
+            self.export_h5(path)
+        except Exception as e:          # noqa: BLE001
+            self.log(f"export failed: {type(e).__name__}: {e}")
+            return None
+        self._overwrite_ok = str(path)
+        self.log(f"{'auto-saved' if auto else 'wrote'} {path}")
+        return path
+
+    def export_h5(self, path):
+        """Write the reduced data of the used runs and active detectors (export.py)."""
+        from . import export
+        scans = self.sorted_scans()
+        runs = {}
+        for s in scans:
+            d, k = self.scans[s], self.keep[s]
+            spec = {}
+            for name in self.cfg.spectrometers:
+                if name in d.spectra:
+                    spec[name] = export.mean_err(self.spec_values(s, name)[k])
+            xgm = self.xgm_values(s)
+            runs[s] = dict(delay=d.delay, n_shots=d.n, n_kept=int(k.sum()),
+                           pump=export.mean_err(self.inten(s, "pump")[k]),
+                           probe=export.mean_err(self.inten(s, "probe")[k]), spec=spec,
+                           xgm=None if xgm is None else export.mean_err(np.asarray(xgm)[k]))
+        dets = {}
+        for label, sr in self.series.items():
+            det = sr["det"]
+            dl = self.cfg.detectors[det].label
+            g = dets.setdefault(dl, dict(key=det, rois=self.views[det].panel.to_dicts(), traces={}, per_run={}))
+            g["traces"][sr["name"]] = dict(raw=sr["raw"], norm=sr["norm"])
+            g["per_run"][sr["name"]] = sr["per_run"]
+        mode, brun = self.bkg_mode()
+        meta = dict(proposal=int(self.cfg.proposal or 0), normalisation=self.cmb_norm.currentText(),
+                    mad_cut=float(self.sp_mad.value()), min_over_median=float(self.sp_min.value()),
+                    drop_nonpositive=int(self.cb_pos.isChecked()),
+                    background=f"run {brun}" if mode == "run" else mode, roi_value=self.cmb_value.currentText(),
+                    intensity_from=self.cfg.intensity_from, software="xtg_mid_gui")
+        export.write(path, meta, runs, dets)
 
 
 # ---------------------------------------------------------------- entry point

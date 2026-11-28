@@ -122,6 +122,31 @@ Every ROI change is saved to `rois_<proposal>.json` in the start folder: the las
 come back when the GUI starts) and, per run, the ROIs that run was analysed with. "ROIs of run
 … → Use" in the Scans card puts back the ROIs of any run.
 
+## Exporting reduced data (.h5)
+
+The **Export (.h5)** card writes one HDF5 file (name of your choice; without a folder it goes
+into the start folder). Tick **auto-save** to write it again after every computation. The
+first time a file would be replaced you are asked once; after that the same file is
+overwritten. A manual Export into an existing file always asks.
+
+Contents (see `export.py`): per run `runs/run_NNNN/` with the delay, `pump` / `probe` (diamond
+diodes, `[mean, error, std]` over the kept shots), `spec/<name>` (e.g. HIREX integral), `xgm`,
+and `[delay, intensity, error]` per detector and ROI (normalised, and `_raw`); per detector
+(`Jung_diffraction`, `Jung_transmission`) the ROIs and, per ROI, the delay `trace` /
+`trace_raw` (`delay_fs, intensity, error, n_shots`) and `per_run` tables.
+
+```python
+import h5py
+f = h5py.File("xtg_11456_reduced.h5")
+delay, inten, err, n = f["Jung_diffraction/Bragg/trace"][()].T
+```
+
+## Detectors
+
+Jungfrau 1 is called **Jung_diffraction** and Jungfrau 2 **Jung_transmission** (old sources
+files with "Jungfrau 1/2" are renamed when read). **Detectors used** in the Data card picks one
+or both: an unticked detector is not read, analysed or exported (config `use_detectors`).
+
 ## Plugging in the real names
 
 1. `python -m xtg_mid_gui --write-config sources.yaml`. (`sources.example.yaml` is a copy of this output.)
@@ -140,6 +165,7 @@ The header shows how many source names are still placeholders. **Sources…** li
 | `delays.py` | The run → delay file (`delays_<proposal>.csv`). |
 | `compute.py` | The reduction engine and its command line: runs + ROIs in, cache files out. |
 | `store.py` | The per-run HDF5 cache (`reduced_<proposal>/run_NNNN.h5`), lazy loading of mean images and spectra. |
+| `export.py` | The reduced-data HDF5 file: writing (Export card) and reading (Fitting page). |
 | `roidb.py` | The ROI database (`rois_<proposal>.json`): last ROIs and ROIs per run. |
 | `agipd.py` | AGIPD1M tile layout (all-tiles canvas, tile numbers, stacked analysis tiles). |
 | `roicheck.py` | ROI position check window (centre of mass / max). |

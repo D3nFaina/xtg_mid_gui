@@ -169,7 +169,7 @@ class SimulatedBackend(Backend):
                 if rois is None:
                     overview = self._agipd_overview(rng, pump, probe, resp)
                 continue
-            if rois is not None and det not in rois:          # detector not asked for
+            if (rois is not None and det not in rois) or not self.cfg.active(det):   # not asked for
                 continue
             if d.kind == "agipd_tiles":
                 per_tile = {t: self._agipd_tile(rng, t, pump, probe, resp) for t in d.tiles}
@@ -520,7 +520,7 @@ class ExtraDataBackend(Backend):
                             overview[t] = np.nanmean(a, axis=0).astype(np.float32)
                     except Exception:
                         continue                                  # tile not recorded
-            elif rois is not None and name not in reducers:       # detector not asked for
+            elif (rois is not None and name not in reducers) or not cfg.active(name):   # not asked for
                 continue
             elif det.kind == "agipd_tiles" and name in reducers:
                 parts[name] = read_stack_reduced(name, det, reducers[name])

@@ -83,8 +83,12 @@ def _spec(n):
                         Source(f"PLACEHOLDER_SA2_XTD_SPEC{n}/CORR/RECEIVER:daqOutput", "data.adc"))
 
 
+JF_LABELS = {1: "Jung_diffraction", 2: "Jung_transmission"}
+LEGACY_LABELS = {"Jungfrau 1": JF_LABELS[1], "Jungfrau 2": JF_LABELS[2]}     # old sources files
+
+
 def _jf(n):
-    return Detector(f"Jungfrau {n}", Source(f"PLACEHOLDER_MID_EXP_JF{n}/CORR/JNGFR0{n}:daqOutput",
+    return Detector(JF_LABELS.get(n, f"Jungfrau {n}"), Source(f"PLACEHOLDER_MID_EXP_JF{n}/CORR/JNGFR0{n}:daqOutput",
                                             "data.adc", pulses="all", reduce="mean"))
 
 
@@ -152,6 +156,9 @@ class SourceConfig:
     param_label: str = "parameter"
     param_unit: str = ""
     param: Source = field(default_factory=lambda: Source("", ""))
+    # --- which detectors to read, analyse and export (logical names); empty = all.
+    #     E.g. ["jf1"] when only Jung_diffraction is used.
+    use_detectors: list = field(default_factory=list)
 
     CRL_KEYS = ("crl_pump_x", "crl_pump_y", "crl_probe_x", "crl_probe_y")
 
@@ -173,7 +180,7 @@ class SourceConfig:
                 raise KeyError(f"unknown config key {k!r}")
             if k == "detectors":
                 cfg.detectors = {
-                    name: Detector(det.get("label", name), Source(**det["data"]),
+                    name: Detector(LEGACY_LABELS.get(det.get("label", name), det.get("label", name)), Source(**det["data"]),
                                    tuple(det.get("shape", (100, 160))), det.get("kind", "image"),
                                    [int(t) for t in det.get("tiles", [])],
                                    det.get("mask_key", "auto") or "")
@@ -220,6 +227,13 @@ class SourceConfig:
     def image_detectors(self) -> dict:
         """Detectors that carry per-shot images and ROIs (everything but the AGIPD overview)."""
         return {n: d for n, d in self.detectors.items() if d.kind != "agipd_overview"}
+
+    def active(self, det) -> bool:
+        """Is this detector read / analysed / exported (use_detectors empty = all)?"""
+        return not self.use_detectors or det in self.use_detectors
+
+    def active_image_detectors(self) -> dict:
+        return {n: d for n, d in self.image_detectors().items() if self.active(n)}
 
     def overview_detector(self):
         return next(((n, d) for n, d in self.detectors.items() if d.kind == "agipd_overview"), (None, None))

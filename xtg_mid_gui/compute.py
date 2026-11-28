@@ -23,7 +23,7 @@ def full_rois(cfg, rois=None, detectors=None):
     """{detector: (signal geometries, background geometries)} for every image detector
     (detectors: only these), empty lists where no ROI is given (the mean image is still made)."""
     rois = rois or {}
-    dets = [d for d in cfg.image_detectors() if detectors is None or d in detectors]
+    dets = [d for d in cfg.active_image_detectors() if detectors is None or d in detectors]
     return {d: (list(rois.get(d, ([], []))[0]), list(rois.get(d, ([], []))[1])) for d in dets}
 
 
