@@ -1967,8 +1967,17 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 label = f"bkg: {roi.name}" + (f" [{self.cfg.detectors[det].label.replace('Jung_', '')}]" if multi else "")
                 sig = [self._roi_values(det, s, roi, ())[self.keep[s]] for s in scans]
                 nrm = [an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe'))[self.keep[s]] for s in scans]
-                self.bkg_series[label] = dict(raw=an.delay_series(delays, sig, [np.ones_like(x) for x in sig]),
-                                              norm=an.delay_series(delays, sig, nrm), color=roi.color)
+                ones = [np.ones_like(x) for x in sig]
+                per_run = {s: dict(raw=(d, *an.ratio_of_means(a, o)[:2]), norm=(d, *an.ratio_of_means(a, b)[:2]))
+                           for s, d, a, o, b in zip(scans, delays, sig, ones, nrm)}
+                self.bkg_series[label] = dict(raw=an.delay_series(delays, sig, ones),
+                                              norm=an.delay_series(delays, sig, nrm), color=roi.color,
+                                              det=det, per_run=per_run, name=f"bkg: {roi.name}")
+
+    def all_series(self) -> dict:
+        """Signal ROI curves, then the background ROI curves ('bkg: ...'): what Fit, Compare
+        and the export offer."""
+        return {**self.series, **getattr(self, "bkg_series", {})}
 
     def _curve(self, p, t, y, e, color, name, dash=False, style=None):
         """Data points + error bars.  Hiding the curve (click its legend entry) hides its error
@@ -2434,7 +2443,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                            probe=export.mean_err(self.inten(s, "probe")[k]), spec=spec,
                            xgm=None if xgm is None else export.mean_err(np.asarray(xgm)[k]))
         dets = {}
-        for label, sr in self.series.items():
+        for label, sr in self.all_series().items():
             det = sr["det"]
             dl = self.cfg.detectors[det].label
             g = dets.setdefault(dl, dict(key=det, rois=self.views[det].panel.to_dicts(), traces={}, per_run={},

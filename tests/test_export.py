@@ -33,7 +33,7 @@ def test_export_file(app, tmp_path):
     p = w.export_h5(tmp_path / "red.h5") or tmp_path / "red.h5"
     assert export.is_reduced(p) and export.detectors(p) == ["Jung_diffraction", "Jung_transmission"]
     tr = export.traces(p, "Jung_diffraction")
-    assert set(tr) == {"TG +1", "Bragg", "TG -1"} and len(tr["Bragg"][0]) == 4
+    assert set(tr) == {"TG +1", "Bragg", "TG -1", "bkg: Background"} and len(tr["Bragg"][0]) == 4
     with h5py.File(p) as f:
         r = f["runs/run_0102"]
         assert r["Jung_diffraction/Bragg"].shape == (3,) and r["pump"].shape == (3,) and "spec/spec1" in r
@@ -95,11 +95,11 @@ def test_fit_page_reads_saved_file_and_compare(app, tmp_path):
     assert fp.from_file() and len(fp.data(in_range=False)[0]) == len(s[0])
 
     cp = fp.compare
-    assert cp.add_current(all_rois=True) == 3              # session, Jung_diffraction
+    assert cp.add_current(all_rois=True) == 4              # session, Jung_diffraction (3 ROIs + background)
     cp.add_file(p)
     cp.cmb_det.setCurrentText("Jung_diffraction")
     cp.cmb_roi.setCurrentText("Bragg")
-    assert cp.add_current() == 1 and len(cp.traces) == 4
+    assert cp.add_current() == 1 and len(cp.traces) == 5
     cp.cmb_mode.setCurrentIndex(1)
     for _, t, y, e, _ in cp.curves():
         assert np.nanmin(y) == pytest.approx(0) and np.nanmax(y) == pytest.approx(1)
@@ -114,7 +114,7 @@ def test_fit_page_reads_saved_file_and_compare(app, tmp_path):
     assert np.allclose(raw, cp.traces[-1]["norm"][1])
     cp.lst.item(0).setSelected(True)
     cp.remove_selected()
-    assert len(cp.traces) == 3
+    assert len(cp.traces) == 4
     y, e, k = normalise_trace([0, 1], [1, 2], [0.1, 0.1], 2, (5, 6))
     assert np.isnan(y).all()
     w.close()
