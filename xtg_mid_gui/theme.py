@@ -202,8 +202,56 @@ def error_bars(t, y, e, color, alpha=230, width=1.5):
                            pen=pg.mkPen(tuple(color[:3]) + (alpha,), width=width))
 
 
-def link_error_bars(curve, eb):
-    """Hide / show the error bars with their curve (legend click)."""
+def link_error_bars(curve, eb, plot=None, y=None, e=None):
+    """Hide / show the error bars with their curve (legend click); with `plot`, the y axis
+    is then rescaled to the curves still shown (error bars included)."""
+    import numpy as np
     curve._eb = eb
-    curve.visibleChanged.connect(lambda: eb.setVisible(curve.isVisible()))
+    curve._rescales = plot is not None
+    if y is not None:
+        y = np.asarray(y, float)
+        e = np.zeros_like(y) if e is None else np.nan_to_num(np.asarray(e, float))
+        curve._ylims = (y - e, y + e)
+
+    def shown():
+        eb.setVisible(curve.isVisible())
+        if plot is not None:
+            rescale_y(plot)
+    curve.visibleChanged.connect(shown)
     return curve
+
+
+def rescale_y(plot):
+    """y range of `plot` to its visible curves (error bars included); x is left alone."""
+    import numpy as np
+    lo, hi = [], []
+    for it in plot.listDataItems():
+        if not it.isVisible():
+            continue
+        lims = getattr(it, "_ylims", None)
+        if lims is None:
+            yd = it.yData
+            if yd is None:
+                continue
+            lims = (np.asarray(yd, float), np.asarray(yd, float))
+        lo.append(np.ravel(lims[0]))
+        hi.append(np.ravel(lims[1]))
+    if not lo:
+        return
+    lo, hi = np.concatenate(lo), np.concatenate(hi)
+    ok = np.isfinite(lo) & np.isfinite(hi)
+    if not ok.any():
+        return
+    a, b = float(lo[ok].min()), float(hi[ok].max())
+    if b <= a:
+        a, b = a - 0.5, b + 0.5
+    plot.getViewBox().setYRange(a, b, padding=0.05)
+
+
+def rescale_on_hide(plot):
+    """Every curve of `plot` hidden / shown from the legend rescales the y axis."""
+    for it in plot.listDataItems():
+        if not getattr(it, "_rescales", False):
+            it._rescales = True
+            if getattr(it, "_eb", None) is None:
+                it.visibleChanged.connect(lambda p=plot: rescale_y(p))

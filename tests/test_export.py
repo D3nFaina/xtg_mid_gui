@@ -139,3 +139,26 @@ def test_hidden_trace_hides_its_error_bars():
         curves[0].setVisible(True)
         assert curves[0]._eb.isVisible()
     w.close()
+
+
+def test_hiding_a_trace_rescales_fit_and_compare():
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("pyqtgraph")
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841
+    w = XTGMidWindow(sim_kw=dict(n_shots=10))
+    w.load([101, 102, 103])
+    cp = w.fit_page.compare
+    cp.cmb_series.setCurrentText("raw")
+    assert cp.add_current(all_rois=True) >= 2
+    curves = [c for c in cp.plot.listDataItems() if getattr(c, "_eb", None) is not None]
+    big = max(curves, key=lambda c: np.nanmax(c._ylims[1]))
+    big.setVisible(False)
+    top = cp.plot.getViewBox().viewRange()[1][1]
+    rest = max(np.nanmax(c._ylims[1]) for c in curves if c is not big)
+    assert top < np.nanmax(big._ylims[1]) and top == pytest.approx(rest, rel=0.2)
+    fit_items = [c for c in w.fit_page.p_fit.listDataItems() if c.name() == "data"]
+    assert fit_items and getattr(fit_items[0], "_rescales", False)
+    w.close()
