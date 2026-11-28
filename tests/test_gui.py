@@ -395,3 +395,33 @@ def test_contrast_levels_and_home(win):
     v.img.setLevels((0, 1))
     v.home()
     assert tuple(np.round(v.img.levels, 6)) == tuple(np.round(ImagePane.contrast_levels(v.img.image), 6))
+
+
+def test_normalise_by_bragg_roi():
+    """'and by ROI' = Bragg: each shot divided by the Bragg ROI x the pump/probe choice;
+    the Bragg curve itself becomes flat (1)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841
+    w = XTGMidWindow(sim_kw=dict(n_shots=15))
+    w.load([101, 102, 103])
+    keys = {k[0]: k for k in w.signal_keys()}
+    bragg = next(n for n in keys if n.startswith("Bragg"))
+    assert w.cmb_normroi.findText(bragg) > 0
+    w.cmb_norm.setCurrentText("none")
+    w.cmb_normroi.setCurrentText(bragg)
+    w.recompute()
+    assert w.norm_label() == bragg
+    assert np.allclose(w.series[bragg]["norm"][1], 1.0)
+    w.cmb_norm.setCurrentText("pump^2")
+    w.recompute()
+    assert w.norm_label() == f"{bragg} x pump^2"
+    _, det, roi = keys[bragg]
+    other = next(n for n in keys if n != bragg and keys[n][1] == det)
+    s = 102
+    k = w.keep[s]
+    sig = w.roi_values(det, s, keys[other][2], w.bkg_geoms(det))[k]
+    den = (w.roi_values(det, s, roi, w.bkg_geoms(det)) * w.inten(s, "pump") ** 2)[k]
+    assert w.series[other]["per_run"][s]["norm"][1] == pytest.approx(np.nanmean(sig) / np.nanmean(den))
+    w.cmb_normroi.setCurrentText("none")
+    w.recompute()
+    assert w.norm_label() == "pump^2"
+    w.close()

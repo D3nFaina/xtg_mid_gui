@@ -171,6 +171,7 @@ NORMALISERS = {
     "none": lambda pu, pr: np.ones_like(pu),
     "probe": lambda pu, pr: pr,
     "pump": lambda pu, pr: pu,
+    "pump^2": lambda pu, pr: pu ** 2,
     "pump x probe": lambda pu, pr: pu * pr,
     "pump^2 x probe": lambda pu, pr: pu ** 2 * pr,
 }
