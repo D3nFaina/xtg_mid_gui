@@ -2,4 +2,4 @@
 # (venv created with --system-site-packages). Only pyqtgraph has to be pip-installed.
 pyqtgraph>=0.13
 # Elsewhere (laptop, no exfel module) also install:
-#   numpy scipy pyyaml PyQt5      (extra_data only needed to read real scans)
+#   numpy scipy h5py pyyaml PyQt5      (extra_data only needed to read real scans)

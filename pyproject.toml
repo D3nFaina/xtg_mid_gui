@@ -7,7 +7,7 @@ name = "xtg-mid-gui"
 version = "0.1.0"
 description = "XTG analysis GUI for European XFEL MID (p11456 Jungfraus + diodes, p7016 AGIPD + HIREX/DES, scan-by-scan delay series)"
 requires-python = ">=3.9"
-dependencies = ["numpy", "scipy", "pyqtgraph>=0.13", "pyyaml"]
+dependencies = ["numpy", "scipy", "h5py", "pyqtgraph>=0.13", "pyyaml"]
 
 [project.optional-dependencies]
 qt = ["PyQt5"]

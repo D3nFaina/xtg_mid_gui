@@ -43,6 +43,7 @@ class ScanData:
     photon_energy: float = np.nan                  # keV used to photonize the Jungfraus, NaN = not photonized
     notes: list = field(default_factory=list)      # other messages for the log
     stats: dict = field(default_factory=dict)      # detector -> ImageStats when its images were not kept
+    cache_path: str = ""                           # reduced-data cache file (store.py) it was loaded from
     _mean: dict = field(default_factory=dict, repr=False)
 
     @property
@@ -56,7 +57,7 @@ class ScanData:
 
     def mean_image(self, det: str) -> np.ndarray:
         if det in self.stats:
-            return self.stats[det].mean
+            return self.stats[det].get_mean()
         if det not in self._mean:
             with np.errstate(invalid="ignore"), warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)          # NaN gaps between AGIPD tiles
@@ -73,13 +74,17 @@ class Backend:
     def load_scan(self, scan: int, rois=None) -> ScanData:     # pragma: no cover - interface
         """rois=None: keep every per-train image (reference run).  rois = {detector:
         (signal geometries, background geometries)}: keep only ImageStats for those
-        detectors (all other runs)."""
+        detectors (all other runs); detectors not in the dict are not read at all."""
         raise NotImplementedError
 
     def load_param(self, scan: int, trains):
         """Only the scanned parameter of a loaded scan, matched to its trains.  None if the
         backend cannot read it alone (then the GUI reloads the whole scan)."""
         return None
+
+    def fingerprint_extra(self) -> dict:
+        """Backend settings that change the data (part of the cache fingerprint, store.py)."""
+        return {}
 
 
 # ---------------------------------------------------------------- simulated
@@ -132,6 +137,9 @@ class SimulatedBackend(Backend):
     def scans(self) -> list[int]:
         return sorted(self.delays)
 
+    def fingerprint_extra(self) -> dict:
+        return dict(n_shots=self.n_shots, seed=self.seed, delays=sorted(self.delays.items()))
+
     def load_scan(self, scan: int, rois=None) -> ScanData:
         if scan not in self.delays:
             raise KeyError(f"simulated scans are {min(self.delays)}-{max(self.delays)}")
@@ -158,7 +166,10 @@ class SimulatedBackend(Backend):
         images, overview = {}, {}
         for det, d in self.cfg.detectors.items():
             if d.kind == "agipd_overview":
-                overview = self._agipd_overview(rng, pump, probe, resp)
+                if rois is None:
+                    overview = self._agipd_overview(rng, pump, probe, resp)
+                continue
+            if rois is not None and det not in rois:          # detector not asked for
                 continue
             if d.kind == "agipd_tiles":
                 per_tile = {t: self._agipd_tile(rng, t, pump, probe, resp) for t in d.tiles}
@@ -499,7 +510,7 @@ class ExtraDataBackend(Backend):
         tile_parts = {}
         for name, det in cfg.detectors.items():
             if det.kind == "agipd_overview":
-                if rois:                                          # light run: the all-tiles view uses the reference run
+                if rois is not None:                              # light run: the all-tiles view uses the reference run
                     continue
                 for t in det.tiles:
                     try:
@@ -509,6 +520,8 @@ class ExtraDataBackend(Backend):
                             overview[t] = np.nanmean(a, axis=0).astype(np.float32)
                     except Exception:
                         continue                                  # tile not recorded
+            elif rois is not None and name not in reducers:       # detector not asked for
+                continue
             elif det.kind == "agipd_tiles" and name in reducers:
                 parts[name] = read_stack_reduced(name, det, reducers[name])
             elif det.kind == "agipd_tiles":
@@ -555,10 +568,10 @@ class ExtraDataBackend(Backend):
         for name, det in cfg.detectors.items():
             if name in reducers:
                 stats[name] = reducers[name].finish(common)[0]
-            elif det.kind == "agipd_tiles":
+            elif det.kind == "agipd_tiles" and name in tile_parts:
                 per = {t: tt_a[1][np.searchsorted(tt_a[0], common)] for t, tt_a in tile_parts[name].items()}
                 images[name] = agipd.stack(per, det.tiles)
-            elif det.kind == "image":
+            elif det.kind == "image" and name in parts:
                 images[name] = pick(parts[name])
         spectra = {n: pick(parts[n]) for n in spec_names}
         if cfg.intensity_from == "spectrometers":
@@ -633,27 +646,29 @@ def default_workers():
         return max(1, min(8, n // 2))
 
 
-def load_many(backend, jobs, workers=None, tick=None):
-    """Read several runs; yields (scan, ScanData or the exception) as each one is done.
+def run_jobs(backend, jobs, here, remote, workers=None, tick=None):
+    """Run one job per run; yields (scan, result or the exception) as each one is done.
 
-    jobs: [(scan, rois)].  Real data with more than one run go to separate processes
-    (one run per process, `workers` at a time); otherwise the runs are read here, one
+    jobs: [(scan, arg)].  Real data with more than one run go to separate processes:
+    remote(type(backend), backend.cfg, scan, *arg) (or (..., scan, arg) if arg is not a
+    tuple), `workers` at a time; otherwise here(scan, arg) runs in this process, one run
     after the other.  tick() is called about 10 times a second while waiting (GUI)."""
     jobs = list(jobs)
     workers = default_workers() if workers is None else workers
     if not isinstance(backend, ExtraDataBackend) or workers <= 1 or len(jobs) <= 1:
-        for s, rois in jobs:
+        for s, arg in jobs:
             if tick:
                 tick()
             try:
-                yield s, backend.load_scan(s, rois=rois)
+                yield s, here(s, arg)
             except Exception as e:      # noqa: BLE001 - reported by the caller
                 yield s, e
         return
     import concurrent.futures as cf
     import multiprocessing as mp
     with cf.ProcessPoolExecutor(min(workers, len(jobs)), mp_context=mp.get_context("spawn")) as pool:
-        futs = {pool.submit(_load_one, type(backend), backend.cfg, s, rois): s for s, rois in jobs}
+        futs = {pool.submit(remote, type(backend), backend.cfg, s, *(arg if isinstance(arg, tuple) else (arg,))): s
+                for s, arg in jobs}
         pending = set(futs)
         while pending:
             done, pending = cf.wait(pending, timeout=0.1, return_when=cf.FIRST_COMPLETED)
@@ -664,3 +679,10 @@ def load_many(backend, jobs, workers=None, tick=None):
                     yield futs[f], e
             if tick:
                 tick()
+
+
+def load_many(backend, jobs, workers=None, tick=None):
+    """Read several runs into memory; yields (scan, ScanData or the exception).
+    jobs: [(scan, rois)] (see Backend.load_scan)."""
+    yield from run_jobs(backend, [(s, (r,)) for s, r in jobs], lambda s, a: backend.load_scan(s, rois=a[0]),
+                        _load_one, workers=workers, tick=tick)

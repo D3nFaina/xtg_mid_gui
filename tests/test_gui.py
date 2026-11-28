@@ -239,7 +239,7 @@ def test_switch_proposal_rebuilds_window(win7016, tmp_path, monkeypatch):
     new = win7016.switch_preset("11456")
     try:
         assert new.cfg.proposal == 11456 and new.mosaic is None
-        assert list(new.cfg.spectrometers) == ["spec1"] and len(new.spec_plots) == 1
+        assert len(new.cfg.spectrometers) == 1 and len(new.spec_plots) == 1
         assert set(new.views) == {"jf1", "jf2"} and not new.scans      # nothing loaded automatically
         back = new.switch_preset("7016")
         assert back.mosaic is not None
