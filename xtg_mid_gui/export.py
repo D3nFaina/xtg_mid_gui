@@ -10,7 +10,8 @@ Layout (``h5ls -r file.h5``)::
         xgm                        [mean, error, std]  if recorded
         <detector>/<roi>           [delay, intensity, error]   normalised
         <detector>/<roi>_raw       [delay, intensity, error]   not normalised
-    /<detector>                    attrs: key (jf1 ...), rois (JSON, as the ROI database)
+    /<detector>                    attrs: key (jf1 ...), rois (JSON, as the ROI database),
+                                          tiles (AGIPD tiles stacked top to bottom, p7016)
         <roi>/trace                (n, 4) delay_fs, intensity, error, n_shots  normalised, runs with
                                    the same delay merged
         <roi>/trace_raw            same, not normalised
@@ -78,6 +79,8 @@ def write(path, meta, runs, dets):
             for label, d in dets.items():
                 g = f.create_group(safe(label))
                 g.attrs.update(key=d.get("key", ""), label=label, rois=json.dumps(d.get("rois", [])))
+                if d.get("tiles"):
+                    g.attrs["tiles"] = np.array(d["tiles"], int)
                 for roi, tr in d["traces"].items():
                     rg = g.create_group(safe(roi))
                     rg.attrs["name"] = roi
@@ -123,6 +126,20 @@ def traces(path, detector, normalised=True) -> dict:
         for rg in g.values():
             a = rg["trace" if normalised else "trace_raw"][()]
             out[rg.attrs.get("name", rg.name.rsplit("/", 1)[-1])] = tuple(a[:, i] for i in range(4))
+    return out
+
+
+def rois(path) -> dict:
+    """{'detectors': {detector key: [ROI dicts]}, 'tiles': {detector key: tiles}} of a reduced file."""
+    import h5py
+    out = {"detectors": {}, "tiles": {}}
+    with h5py.File(path, "r") as f:
+        for label in json.loads(f.attrs["detectors"]):
+            g = f[safe(label)]
+            key = str(g.attrs.get("key", "") or label)
+            out["detectors"][key] = json.loads(g.attrs.get("rois", "[]"))
+            if "tiles" in g.attrs:
+                out["tiles"][key] = [int(t) for t in g.attrs["tiles"]]
     return out
 
 

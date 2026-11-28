@@ -233,7 +233,8 @@ class _MeanCache:
         self.n, self.d = n, OrderedDict()
 
     def get(self, path, det):
-        key = (str(path), det)
+        st = os.stat(path)                   # a file rewritten by a worker process is read again
+        key = (str(path), det, st.st_mtime_ns, st.st_size, st.st_ino)
         if key in self.d:
             self.d.move_to_end(key)
             return self.d[key]

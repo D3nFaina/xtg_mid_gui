@@ -6,7 +6,8 @@
 Format (plain JSON, one ROI = the dict of rois.RoiSpec.to_dict)::
 
     {"version": 1,
-     "last": {"saved": "2026-11-28T07:12:00", "detectors": {"jf1": [{...}, ...], "jf2": [...]}},
+     "last": {"saved": "2026-11-28T07:12:00", "detectors": {"jf1": [{...}, ...], "jf2": [...]},
+              "tiles": {"agipd_sub": [9, 8, 15]}},          # AGIPD tiles the ROIs sit on (p7016)
      "runs": {"290": {"saved": "...", "detectors": {...}}, ...}}
 """
 from __future__ import annotations
@@ -46,17 +47,27 @@ def _write(proposal, db):
         return False
 
 
-def _entry(det_rois):
-    return {"saved": time.strftime("%Y-%m-%dT%H:%M:%S"), "detectors": det_rois}
+def _entry(det_rois, tiles=None):
+    e = {"saved": time.strftime("%Y-%m-%dT%H:%M:%S"), "detectors": det_rois}
+    if tiles:
+        e["tiles"] = {k: [int(t) for t in v] for k, v in tiles.items()}
+    return e
 
 
-def save(proposal, det_rois, runs=()):
-    """Store det_rois ({detector: [ROI dicts]}) as the last ROIs and as the ROIs of `runs`."""
+def save(proposal, det_rois, runs=(), tiles=None):
+    """Store det_rois ({detector: [ROI dicts]}) as the last ROIs and as the ROIs of `runs`;
+    tiles: {AGIPD detector: tile list} the stacked-tile ROIs belong to."""
     db = load_db(proposal)
-    db["last"] = _entry(det_rois)
+    db["last"] = _entry(det_rois, tiles)
     for r in runs:
-        db["runs"][str(int(r))] = _entry(det_rois)
+        db["runs"][str(int(r))] = _entry(det_rois, tiles)
     return _write(proposal, db)
+
+
+def entry(proposal, run=None) -> dict:
+    """The whole saved entry ({'detectors': ..., 'tiles': ...}) of a run, or the last one; {} if none."""
+    db = load_db(proposal)
+    return (db.get("last") if run is None else db["runs"].get(str(int(run)))) or {}
 
 
 def last(proposal):

@@ -485,11 +485,14 @@ class FitPage(QtWidgets.QWidget):
         txt = theme.pal()["text"]
         sig_col = theme.PROBE
         out = ~np.isin(t_all, t)
-        self.p_fit.addItem(pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), pen=pg.mkPen(sig_col + (120,))))
-        self.p_fit.plot(t, y, pen=None, symbol="o", symbolSize=6, symbolBrush=sig_col, symbolPen=None, name="data")
-        if out.any():
-            self.p_fit.plot(t_all[out], y_all[out], pen=None, symbol="o", symbolSize=5,
+        if out.any():                                           # all points joined, grey outside the range
+            k = np.argsort(t_all)
+            self.p_fit.plot(t_all[k], y_all[k], pen=pg.mkPen(theme.neutral(110), width=1), symbol="o", symbolSize=5,
                             symbolBrush=theme.neutral(110), symbolPen=None, name="outside fit range")
+        self.p_fit.addItem(theme.error_bars(t, y, e, sig_col))
+        k = np.argsort(t)
+        self.p_fit.plot(t[k], y[k], pen=pg.mkPen(sig_col, width=1.5), symbol="o", symbolSize=6, symbolBrush=sig_col,
+                        symbolPen=None, name="data")
         tt = np.linspace(t.min(), t.max(), 1500)
         full, th = F.model(tt, v, self.spec), F.thermal(tt, v)
         lab = "full fit" if fitted else "start values"
@@ -790,9 +793,10 @@ class ComparePanel(QtWidgets.QWidget):
             if not np.isfinite(y).any():
                 bad.append(label)
                 continue
-            p.addItem(pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), pen=pg.mkPen(color + (140,), width=1)))
-            p.plot(t, y, pen=pg.mkPen(color, width=1.2), symbol="o", symbolSize=4, symbolBrush=color,
-                   symbolPen=None, name=label)
+            p.addItem(theme.error_bars(t, y, e, color))
+            k = np.argsort(t)
+            p.plot(np.asarray(t)[k], np.asarray(y)[k], pen=pg.mkPen(color, width=1.5), symbol="o", symbolSize=6,
+                   symbolBrush=color, symbolPen=None, name=label)
         if mode == 2:
             self.region.blockSignals(True)
             self.region.setRegion((self.sp_t1.value(), self.sp_t2.value()))

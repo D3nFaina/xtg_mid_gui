@@ -212,7 +212,9 @@ def test_7016_tile_choice_keeps_rois_on_their_tiles(win7016):
     y0 = bragg.geometry()[1]
     w.mosaic.toggle_tile(3)                      # click on tile 3 in the all-tiles view: added at the bottom
     assert w.mosaic.chosen() == [8, 10, 15, 3]
+    ov = w.scans[w.ref_scan].overview
     w.mosaic.b_apply.click()
+    assert w.scans[w.ref_scan].overview is ov                  # all-tiles view kept, not read again
     assert w.cfg.detectors["agipd_sub"].tiles == [8, 10, 15, 3]
     assert w.views["agipd_sub"]._raw.shape[0] == 4 * 128 + 3 * 8
     assert bragg.geometry()[1] == pytest.approx(y0)            # tile 15 still third from the top

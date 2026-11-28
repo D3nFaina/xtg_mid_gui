@@ -520,6 +520,10 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         b_roiuse.clicked.connect(lambda: self.use_rois_of_run(self.cmb_roirun.currentData()))
         rrow.addWidget(b_roiuse)
         c.body.addLayout(rrow)
+        b_roifile = QtWidgets.QPushButton("ROIs from file…")
+        b_roifile.setToolTip("Put back the ROIs (and AGIPD tiles) stored in an exported .h5 file or a ROI .json file")
+        b_roifile.clicked.connect(lambda: self.rois_from_file())
+        c.body.addWidget(b_roifile)
         self.tbl = QtWidgets.QTableWidget(0, 5)
         self.tbl.setHorizontalHeaderLabels(["", "run", "delay fs", "shots", "kept"])
         self.tbl.verticalHeader().setVisible(False)
@@ -677,7 +681,11 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 d.tiles = list(tiles)
         self.log(f"AGIPD tiles to analyse: {' '.join(map(str, tiles))}")
         if self.scans:
-            self.reload_scans()
+            self._keep_overview = {s: d.overview for s, d in self.scans.items() if d.overview}
+            try:
+                self.reload_scans()
+            finally:
+                self._keep_overview = {}
 
     def _move_rois_with_tiles(self, det, old_tiles, new_tiles):
         """Keep each ROI on the same AGIPD tile when the stack of analysed tiles changes."""
@@ -1383,8 +1391,15 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._typed_order = list(dict.fromkeys((list(getattr(self, '_typed_order', [])) if append else []) + list(scans)))
         scans = sorted(scans, key=lambda s: s != self.ref_scan)    # reference first: it places the ROIs
         ref = [s for s in scans if s == self.ref_scan]
-        for s, d in load_many(self.backend, [(s, None) for s in ref]):
-            self._add_loaded(s, d, known)
+        keep = getattr(self, "_keep_overview", {})             # new AGIPD tiles: the all-tiles view stays
+        self.backend.read_overview = not any(s in keep for s in ref)
+        try:
+            for s, d in load_many(self.backend, [(s, None) for s in ref]):
+                if not isinstance(d, Exception) and s in keep:
+                    d.overview = keep[s]
+                self._add_loaded(s, d, known)
+        finally:
+            self.backend.read_overview = True
         self._ensure_rois()
         self._cache_reference()
         rest = [s for s in scans if s != self.ref_scan]
@@ -1738,22 +1753,49 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def det_rois(self):
         return {det: v.panel.to_dicts() for det, v in self.views.items()}
 
+    def agipd_tiles(self) -> dict:
+        """{AGIPD stacked-tiles detector: its tiles} (empty without AGIPD)."""
+        return {n: list(d.tiles) for n, d in self.cfg.detectors.items() if d.kind == "agipd_tiles"}
+
     def save_rois(self):
-        """Save the ROIs on screen as the last ROIs and as the ROIs of the loaded runs."""
-        cur = json_dumps(self.det_rois())
+        """Save the ROIs on screen (and the AGIPD tiles they sit on) as the last ROIs and as
+        the ROIs of the loaded runs."""
+        cur = json_dumps([self.det_rois(), self.agipd_tiles()])
         runs = tuple(sorted(self.scans))
         if (cur, runs) == getattr(self, "_rois_saved", None):
             return
-        if roidb.save(self.cfg.proposal, self.det_rois(), runs):
+        if roidb.save(self.cfg.proposal, self.det_rois(), runs, tiles=self.agipd_tiles()):
             self._rois_saved = (cur, runs)
+        else:
+            self.log(f"ROIs could not be saved to {roidb.path_for(self.cfg.proposal)}")
         self._fill_roirun_combo()
 
     def _restore_rois(self):
-        last = roidb.last(self.cfg.proposal)
-        if last:
-            self._set_det_rois(last)
+        e = roidb.entry(self.cfg.proposal)
+        if e.get("detectors"):
+            self._apply_saved(e, reload=False)
             self.log(f"ROIs of the last session restored ({roidb.path_for(self.cfg.proposal).name})")
         self._fill_roirun_combo()
+
+    def _apply_saved(self, e, reload=True):
+        """Put back saved ROIs ({'detectors': ..., 'tiles': ...}): first the AGIPD tiles they
+        were drawn on, then the ROIs.  Loaded runs are read again if the tiles changed."""
+        new_tiles = {n: list(t) for n, t in (e.get("tiles") or {}).items()
+                     if n in self.cfg.detectors and self.cfg.detectors[n].kind == "agipd_tiles" and t}
+        changed = any(self.cfg.detectors[n].tiles != t for n, t in new_tiles.items())
+        for n, t in new_tiles.items():
+            self.cfg.detectors[n].tiles = t
+        if new_tiles and self.mosaic is not None:
+            self.mosaic.ed_tiles.setText(" ".join(map(str, next(iter(new_tiles.values())))))
+            self.mosaic._mark()
+        self._set_det_rois(e.get("detectors") or {})
+        if changed and reload and self.scans:
+            self.log(f"AGIPD tiles to analyse: {' '.join(map(str, next(iter(new_tiles.values()))))}")
+            self._keep_overview = {s: d.overview for s, d in self.scans.items() if d.overview}
+            try:
+                self.reload_scans()
+            finally:
+                self._keep_overview = {}
 
     def _set_det_rois(self, det_rois):
         for det, rois in det_rois.items():
@@ -1763,13 +1805,41 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def use_rois_of_run(self, run):
         if run is None:
             return
-        r = roidb.for_run(self.cfg.proposal, run)
-        if not r:
+        e = roidb.entry(self.cfg.proposal, run)
+        if not e.get("detectors"):
             self.log(f"no ROIs saved for run {run}")
             return
-        self._set_det_rois(r)
+        self._apply_saved(e)
         self.log(f"ROIs of run {run} loaded")
         self._schedule()
+
+    def rois_from_file(self, path=None):
+        """ROIs (and AGIPD tiles) of an exported .h5 file, or of a ROI file (.json)."""
+        if path is None:
+            from .delays import start_dir
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "ROIs from an exported file", str(start_dir()),
+                                                            "Exported data or ROI files (*.h5 *.json)")
+            if not path:
+                return
+        from pathlib import Path
+        from . import export
+        from .delays import start_dir
+        try:
+            e = export.rois(path) if export.is_reduced(path) else {"detectors": roidb.read_roi_file(path)}
+        except Exception as ex:      # noqa: BLE001
+            self.log(f"no ROIs read from {path}: {type(ex).__name__}: {ex}")
+            return
+        e["detectors"] = {self._det_key(k): v for k, v in (e.get("detectors") or {}).items()}
+        e["tiles"] = {self._det_key(k): v for k, v in (e.get("tiles") or {}).items()}
+        self._apply_saved(e)
+        self.log(f"ROIs loaded from {Path(path).name}")
+        self._schedule()
+
+    def _det_key(self, k):
+        """Detector key from a key or a label (Jung_diffraction -> jf1)."""
+        if k in self.cfg.detectors:
+            return k
+        return next((n for n, d in self.cfg.detectors.items() if d.label == k), k)
 
     def _fill_roirun_combo(self):
         if not hasattr(self, "cmb_roirun"):
@@ -1906,7 +1976,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         if len(t) == 0:
             return None
         style = style or (QtCore.Qt.DashLine if dash else QtCore.Qt.SolidLine)
-        eb = pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), pen=pg.mkPen(color + (150,), width=1))
+        eb = theme.error_bars(t, y, e, color)
         p.addItem(eb)
         c = p.plot(t, y, pen=pg.mkPen(color, width=1, style=style), symbol="o", symbolSize=4,
                    symbolBrush=color, symbolPen=None, name=name)
@@ -2367,7 +2437,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         for label, sr in self.series.items():
             det = sr["det"]
             dl = self.cfg.detectors[det].label
-            g = dets.setdefault(dl, dict(key=det, rois=self.views[det].panel.to_dicts(), traces={}, per_run={}))
+            g = dets.setdefault(dl, dict(key=det, rois=self.views[det].panel.to_dicts(), traces={}, per_run={},
+                                         tiles=list(self.cfg.detectors[det].tiles)))
             g["traces"][sr["name"]] = dict(raw=sr["raw"], norm=sr["norm"])
             g["per_run"][sr["name"]] = sr["per_run"]
         mode, brun = self.bkg_mode()
