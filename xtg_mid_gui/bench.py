@@ -33,6 +33,15 @@ def main(argv=None):
     cfg.proposal = a.proposal
     be = make_backend("extra_data", cfg)
 
+    import extra_data as ex
+    run = ex.open_run(cfg.proposal, a.run, data=cfg.data)
+    for name, d in cfg.image_detectors().items():
+        if d.kind == "image" and cfg.active(name):
+            try:
+                kd = run[d.data.source, d.data.key]
+                print(f"{name}: {d.data.source} {d.data.key} shape {kd.shape} {kd.dtype}")
+            except Exception as e:      # noqa: BLE001
+                print(f"{name}: {type(e).__name__}: {e}")
     t0 = time.time()
     full = be.load_scan(a.run)
     t_full = time.time() - t0

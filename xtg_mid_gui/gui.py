@@ -1398,6 +1398,11 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self._typed_order = list(dict.fromkeys((list(getattr(self, '_typed_order', [])) if append else []) + list(scans)))
         scans = sorted(scans, key=lambda s: s != self.ref_scan)    # reference first: it places the ROIs
         ref = [s for s in scans if s == self.ref_scan]
+        rest = [s for s in scans if s != self.ref_scan]
+        force = getattr(self, "_force_read", False)
+        pre = None
+        if ref and rest and all(v.panel.rois for d, v in self.views.items() if self.cfg.active(d)):
+            pre = self._start_reduce(rest, force)              # ROIs known: the other runs are reduced meanwhile
         keep = getattr(self, "_keep_overview", {})             # new AGIPD tiles: the all-tiles view stays
         self.backend.read_overview = not any(s in keep for s in ref)
         try:
@@ -1409,8 +1414,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             self.backend.read_overview = True
         self._ensure_rois()
         self._cache_reference()
-        rest = [s for s in scans if s != self.ref_scan]
-        for s, d in self._reduce(rest, force=getattr(self, "_force_read", False)):
+        for s, d in self._reduce(rest, force=force, pre=pre):
             self._add_loaded(s, d, known)
         self._force_read = False
         self.statusBar().clearMessage()
@@ -1706,10 +1710,26 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         self.b_recalc.setText(f"Recalculate {n} run{'s' * (n != 1)} for the new ROIs")
 
     # ------------------------------------------------------------ reduction engine + cache
-    def _reduce(self, scans, force=False):
+    def _start_reduce(self, scans, force=False):
+        """Start the engine on these runs in a background thread (worker processes for real
+        data) while the reference run is read here.  Handed to _reduce(pre=...)."""
+        import threading
+        pre = dict(spec=self.roi_spec(), out=[], t0=time.time(), scans=list(scans))
+
+        def work():
+            try:
+                for item in compute.ensure_many(self.backend, scans, pre["spec"], force=force):
+                    pre["out"].append(item)
+            except Exception as e:      # noqa: BLE001 - _reduce falls back to the normal path
+                pre["error"] = e
+        pre["thread"] = threading.Thread(target=work, daemon=True)
+        pre["thread"].start()
+        return pre
+
+    def _reduce(self, scans, force=False, pre=None):
         """Have the engine (compute.py) bring the cache files of these runs up to date with
         the current ROIs, then load them (only their numbers).  Yields (scan, ScanData or
-        the exception)."""
+        the exception).  pre: the same work already started by _start_reduce."""
         if not scans:
             return
         spec, t0, n_done, did = self.roi_spec(), time.time(), 0, {}
@@ -1720,7 +1740,18 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.processEvents()
             self._timer.stop()
 
-        for s, info in compute.ensure_many(self.backend, scans, spec, force=force, tick=tick):
+        results = None
+        if pre is not None:
+            t0 = pre["t0"]
+            while pre["thread"].is_alive():
+                n_done = len(pre["out"])
+                tick()
+                pre["thread"].join(0.1)
+            if "error" not in pre and pre["spec"] == spec and pre["scans"] == list(scans):
+                results = pre["out"]               # else: ROIs changed meanwhile, bring the files up to date
+        n_done = 0
+        for s, info in (results if results is not None else
+                        compute.ensure_many(self.backend, scans, spec, force=force and pre is None, tick=tick)):
             n_done += 1
             if isinstance(info, Exception):
                 yield s, info

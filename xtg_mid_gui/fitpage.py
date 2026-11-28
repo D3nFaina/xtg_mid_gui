@@ -493,7 +493,8 @@ class FitPage(QtWidgets.QWidget):
         self.p_fit.addItem(eb)
         k = np.argsort(t)
         theme.link_error_bars(self.p_fit.plot(t[k], y[k], pen=pg.mkPen(sig_col, width=1.5), symbol="o", symbolSize=6,
-                                              symbolBrush=sig_col, symbolPen=None, name="data"), eb)
+                                              symbolBrush=sig_col, symbolPen=None, name="data"), eb,
+                              self.p_fit, y[k], np.asarray(e)[k])
         tt = np.linspace(t.min(), t.max(), 1500)
         full, th = F.model(tt, v, self.spec), F.thermal(tt, v)
         lab = "full fit" if fitted else "start values"
@@ -501,6 +502,7 @@ class FitPage(QtWidgets.QWidget):
                         name=lab)
         self.p_fit.plot(tt, th, pen=pg.mkPen(theme.PUMP, width=1.5, style=QtCore.Qt.DashLine), name="thermal part")
         theme.set_title(self.p_fit, f"Data, {'full fit' if fitted else 'start values'} and thermal part")
+        theme.rescale_on_hide(self.p_fit)
 
         self.p_th.plot(t, y, pen=None, symbol="o", symbolSize=5, symbolBrush=sig_col + (90,), symbolPen=None)
         self.p_th.plot(tt, th, pen=pg.mkPen(theme.PUMP, width=2.5))
@@ -798,7 +800,9 @@ class ComparePanel(QtWidgets.QWidget):
             p.addItem(eb)
             k = np.argsort(t)
             theme.link_error_bars(p.plot(np.asarray(t)[k], np.asarray(y)[k], pen=pg.mkPen(color, width=1.5), symbol="o",
-                                         symbolSize=6, symbolBrush=color, symbolPen=None, name=label), eb)
+                                         symbolSize=6, symbolBrush=color, symbolPen=None, name=label), eb,
+                                  p, np.asarray(y)[k], np.asarray(e)[k])
+        theme.rescale_on_hide(p)
         if mode == 2:
             self.region.blockSignals(True)
             self.region.setRegion((self.sp_t1.value(), self.sp_t2.value()))
