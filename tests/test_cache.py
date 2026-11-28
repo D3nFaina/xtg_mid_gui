@@ -176,3 +176,34 @@ def test_gui_remembers_agipd_tiles_with_the_rois(tmp_path, monkeypatch):
     assert w2.cfg.detectors["agipd_sub"].tiles == [9, 8, 15]
     assert w2.views["agipd_sub"].panel.rois[0].geometry() == moved
     w2.close()
+
+
+def test_background_rois_in_fit_compare_and_export(tmp_path, monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("pyqtgraph")
+    monkeypatch.setenv("XTG_MID_START_DIR", str(tmp_path))
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui import export
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841
+    w = XTGMidWindow(sim_kw=dict(n_shots=10))
+    w.load([101, 102, 103])
+    det = next(iter(w.views))
+    bkg = next(r for r in w.views[det].panel.rois if r.background)
+    name = f"bkg: {bkg.name}"
+    cmp = w.fit_page.compare
+    cmp.cmb_det.setCurrentText(w.cfg.detectors[det].label)
+    assert name in cmp._session_curves(w.cfg.detectors[det].label)
+    assert any(n.startswith("bkg: ") for n in w.fit_page.curve_names())
+    before = cmp._session_curves(w.cfg.detectors[det].label)[name]["raw"][1].copy()
+    bkg.item.setPos(bkg.item.pos() + pg_point(25, 20))                 # moved on the detector
+    w.recompute()
+    w.recalc_stale()
+    after = cmp._session_curves(w.cfg.detectors[det].label)[name]["raw"][1]
+    assert np.all(np.isfinite(after)) and not np.allclose(after, before)
+    cmp.cmb_roi.setCurrentText(name)
+    assert cmp.add_current() == 1 and cmp.traces[-1]["label"].startswith(name)
+    out = tmp_path / "e.h5"
+    w.export_h5(out)
+    assert name in export.traces(out, w.cfg.detectors[det].label)
+    w.close()

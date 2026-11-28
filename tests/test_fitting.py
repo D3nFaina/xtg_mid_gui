@@ -68,7 +68,7 @@ def test_fit_page(tmp_path):
     w = XTGMidWindow(sim_kw=dict(n_shots=20))
     w.load(w.backend.scans())
     fp = w.fit_page
-    assert fp.cmb_roi.count() == 6 and "NOT evenly spaced" in fp.lbl_warn.text()
+    assert fp.cmb_roi.count() == 8 and "NOT evenly spaced" in fp.lbl_warn.text()
     assert fp.run_fit(True).success                            # notebook order: thermal first ...
     nus = fp.guess_nu()                                        # ... then ν from FFT of data - thermal
     assert len(nus) == 2 and min(abs(np.array(nus) - 2.38)) < 0.45     # 2.38 THz mode, within one FFT bin (0.41 THz)

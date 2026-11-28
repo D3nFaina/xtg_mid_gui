@@ -393,7 +393,7 @@ class FitPage(QtWidgets.QWidget):
             if not self.cmb_det.currentText():
                 return []
             return list(self.file_traces(self.cmb_src.currentData(), self.cmb_det.currentText()))
-        return list(self.win.series)
+        return list(self.win.all_series())
 
     def _fill_rois(self):
         cur = self.cmb_roi.currentText()
@@ -412,7 +412,7 @@ class FitPage(QtWidgets.QWidget):
                 return None
             return self.file_traces(self.cmb_src.currentData(), self.cmb_det.currentText(), norm).get(
                 self.cmb_roi.currentText())
-        s = self.win.series.get(self.cmb_roi.currentText())
+        s = self.win.all_series().get(self.cmb_roi.currentText())
         return None if s is None else s["norm" if norm else "raw"]
 
     def data(self, in_range=True):
@@ -669,14 +669,14 @@ class ComparePanel(QtWidgets.QWidget):
             self.cmb_det.addItems(export.detectors(self.cmb_src.currentData()))
         else:
             win = self.page.win
-            dets = dict.fromkeys(win.cfg.detectors[s["det"]].label for s in win.series.values())
+            dets = dict.fromkeys(win.cfg.detectors[s["det"]].label for s in win.all_series().values())
             self.cmb_det.addItems(list(dets))
         self.cmb_det.blockSignals(False)
         self._fill_rois()
 
     def _session_curves(self, det_label):
         win = self.page.win
-        return {s["name"]: s for s in win.series.values() if win.cfg.detectors[s["det"]].label == det_label}
+        return {s["name"]: s for s in win.all_series().values() if win.cfg.detectors[s["det"]].label == det_label}
 
     def _fill_rois(self):
         cur = self.cmb_roi.currentText()
