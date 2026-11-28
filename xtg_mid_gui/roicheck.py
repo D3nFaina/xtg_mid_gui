@@ -38,8 +38,9 @@ class RoiPositionWindow(QtWidgets.QWidget):
         row.addWidget(self.cmb_mode)
         lab("   on:")
         self.cmb_per = QtWidgets.QComboBox()
-        self.cmb_per.addItems(["shot by shot", "mean of each run"])
-        self.cmb_per.setToolTip("every kept shot, or the mean image of each run's kept shots (one point per run)")
+        self.cmb_per.addItems(["mean of each run", "shot by shot"])
+        self.cmb_per.setToolTip("the mean image of each run (one point per run: the pointing / drift check),\n"
+                                "or every kept shot (only meaningful for strong spots such as the Bragg peak)")
         row.addWidget(self.cmb_per)
         self.cb_bkg = QtWidgets.QCheckBox("subtract background ROI")
         self.cb_bkg.setChecked(True)

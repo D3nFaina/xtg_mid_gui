@@ -41,6 +41,9 @@ def test_roi_position_window(app):
     w.b_pos.setChecked(True)
     pw = w.pos_win
     assert pw.isVisible() and pw.cmb_roi.count() == len(w.signal_keys())
+    assert pw.cmb_per.currentText() == "mean of each run"            # default: one point per run
+    assert sum(len(i.points()) for i in pw.p_x.items if hasattr(i, "points")) == 3
+    pw.cmb_per.setCurrentText("shot by shot")
     n_kept = sum(int(w.keep[s].sum()) for s in w.sorted_scans())
     assert sum(len(i.points()) for i in pw.p_x.items if hasattr(i, "points")) == n_kept
     pw.cmb_per.setCurrentText("mean of each run")

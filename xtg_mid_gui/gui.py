@@ -556,12 +556,19 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         f.addRow("min / median", self.sp_min)
         f.addRow("", self.cb_pos)
         f.addRow("normalise", self.cmb_norm)
+        self.cmb_normroi = ShrinkCombo(140, 80)
+        self.cmb_normroi.addItem("none")
+        self.cmb_normroi.setToolTip("Also divide, shot by shot, by this ROI (e.g. the Bragg peak: it is the probe\n"
+                                    "diffracted by the lattice, so it carries probe x Bragg reflectivity).\n"
+                                    "For TG ∝ pump² x probe x R_Bragg: ROI = Bragg and normalise = pump^2.")
+        f.addRow("and by ROI", self.cmb_normroi)
         self.lbl_cuts = _label("", "muted")
         self.lbl_cuts.setToolTip("A cut that would remove every shot of a scan is skipped for that scan")
         f.addRow(self.lbl_cuts)
         for w in (self.sp_mad, self.sp_min):
             w.valueChanged.connect(self._schedule)
         self.cmb_norm.currentTextChanged.connect(self._schedule)
+        self.cmb_normroi.currentTextChanged.connect(self._schedule)
         v.addWidget(c)
 
         c = Card("Export (.h5)")
@@ -1122,8 +1129,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             info += f" · no parameter in scan {', '.join(map(str, missing))}"
         self._param_info(info)
         norm = self.cmb_norm.currentText()
-        nrm = self._concat_over(use, lambda s: an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe')))
-        theme.set_title(self.pp_norm, f"Normalised by {norm}")
+        nrm = self._concat_over(use, self.norm_values)
+        theme.set_title(self.pp_norm, f"Normalised by {self.norm_label()}")
         group = self.cmb_pgroup.currentText()
         sel = next((k for k in keys if k[0] == self.cmb_psig.currentText()), keys[0] if keys else None)
         first_det = next(iter(self.views), None)
@@ -1148,7 +1155,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 c = tuple(int(v) for v in cmap.map(i / max(len(groups) - 1, 1), mode="byte")[:3])
                 xs = self._concat_over(ss, self.param_values)
                 sig = self._concat_over(ss, lambda s: self.roi_values(det, s, roi, bkg))
-                nn = self._concat_over(ss, lambda s: an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe')))
+                nn = self._concat_over(ss, self.norm_values)
                 self._curve(self.pp_norm, *self._param_points(xs, sig, nn)[:3], c, name)
                 self._curve(self.pp_raw, *self._param_points(xs, sig, None)[:3], c, name)
             theme.set_title(self.pp_norm, f"{sel[0]} · normalised by {norm}")
@@ -1911,6 +1918,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                 self.tbl.blockSignals(True)
                 self.tbl.item(i, 4).setText(str(int(self.keep[s].sum())))
                 self.tbl.blockSignals(False)
+        self._fill_normroi()
         self._compute_series(scans)
         self._draw_delay(scans)
         cur = self.cmb_sig.currentText()
@@ -1940,15 +1948,48 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         if getattr(self, "cb_autosave", None) is not None and self.cb_autosave.isChecked() and self.series:
             self._autosave_timer.start()
 
+    def _fill_normroi(self):
+        """ROIs offered as normaliser: the signal ROIs (kept selection if still there)."""
+        cmb = self.cmb_normroi
+        cur = cmb.currentText()
+        names = ["none"] + [k[0] for k in self.signal_keys()]
+        if [cmb.itemText(i) for i in range(cmb.count())] != names:
+            cmb.blockSignals(True)
+            cmb.clear()
+            cmb.addItems(names)
+            cmb.setCurrentIndex(max(cmb.findText(cur), 0))
+            cmb.blockSignals(False)
+
+    def norm_roi(self):
+        """(label, det, roi) chosen in 'and by ROI', or None."""
+        name = self.cmb_normroi.currentText() if hasattr(self, "cmb_normroi") else "none"
+        return next((k for k in self.signal_keys() if k[0] == name), None)
+
+    def norm_label(self) -> str:
+        n, k = self.cmb_norm.currentText(), self.norm_roi()
+        if k is None:
+            return n
+        return k[0] if n == "none" else f"{k[0]} x {n}"
+
+    def norm_values(self, s) -> np.ndarray:
+        """Per-shot normaliser of run s (all shots): pump / probe choice x the chosen ROI."""
+        v = an.normaliser(self.cmb_norm.currentText(), self.inten(s, 'pump'), self.inten(s, 'probe'))
+        k = self.norm_roi()
+        if k is not None:
+            _, det, roi = k
+            r = np.asarray(self.roi_values(det, s, roi, self.bkg_geoms(det)), float).copy()
+            r[~np.isfinite(r) | (r == 0)] = np.nan
+            v = v * r
+        return v
+
     def _compute_series(self, scans):
         """series[label] = dict(raw=(t, y, e, n), norm=(t, y, e, n), color)."""
         self.series = {}
-        norm = self.cmb_norm.currentText()
         delays = [self.scans[s].delay for s in scans]
         for label, det, roi in self.signal_keys():
             bkg = self.bkg_geoms(det)
             sig = [self.roi_values(det, s, roi, bkg)[self.keep[s]] for s in scans]
-            nrm = [an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe'))[self.keep[s]] for s in scans]
+            nrm = [self.norm_values(s)[self.keep[s]] for s in scans]
             ones = [np.ones_like(x) for x in sig]
             per_run = {s: dict(raw=(d, *an.ratio_of_means(a, o)[:2]), norm=(d, *an.ratio_of_means(a, b)[:2]))
                        for s, d, a, o, b in zip(scans, delays, sig, ones, nrm)}
@@ -1966,7 +2007,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                     continue
                 label = f"bkg: {roi.name}" + (f" [{self.cfg.detectors[det].label.replace('Jung_', '')}]" if multi else "")
                 sig = [self._roi_values(det, s, roi, ())[self.keep[s]] for s in scans]
-                nrm = [an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe'))[self.keep[s]] for s in scans]
+                nrm = [self.norm_values(s)[self.keep[s]] for s in scans]
                 ones = [np.ones_like(x) for x in sig]
                 per_run = {s: dict(raw=(d, *an.ratio_of_means(a, o)[:2]), norm=(d, *an.ratio_of_means(a, b)[:2]))
                            for s, d, a, o, b in zip(scans, delays, sig, ones, nrm)}
@@ -2047,8 +2088,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             vals = [self.inten(s, attr)[self.keep[s]] for s in scans]
             t, y, e, _ = an.delay_series(delays, vals, [np.ones_like(v) for v in vals])
             self._curve(self.p_diode, t, y, e, color, name)
-        n_txt = self.cmb_norm.currentText()
-        theme.set_title(self.p_norm, f"Normalised by {n_txt}")
+        theme.set_title(self.p_norm, f"Normalised by {self.norm_label()}")
 
     def _scatter(self, p, x, y, colors, title=None, with_r=True, profile=False):
         p.clear()
@@ -2115,8 +2155,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         _, det, roi = sel
         bkg = self.bkg_geoms(det)
         sig = self._concat(lambda s: self.roi_values(det, s, roi, bkg))
-        nrm_name = self.cmb_norm.currentText()
-        nrm = self._concat(lambda s: an.normaliser(nrm_name, self.inten(s, 'pump'), self.inten(s, 'probe')))
+        nrm_name = self.norm_label()
+        nrm = self._concat(self.norm_values)
         self._scatter(self.c_spu, pump, sig, cols, f"{roi.name} vs pump")
         self._scatter(self.c_spr, probe, sig, cols, f"{roi.name} vs probe")
         self._scatter(self.c_sn, nrm, sig, cols, f"{roi.name} vs {nrm_name}")
@@ -2362,7 +2402,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
     def export_csv(self, path):
         with open(path, "w", newline="") as f:
             w = csv.writer(f)
-            f.write(f"# normalisation: {self.cmb_norm.currentText()}; MAD cut {self.sp_mad.value()}; "
+            f.write(f"# normalisation: {self.norm_label()}; MAD cut {self.sp_mad.value()}; "
                     f"min diode/median {self.sp_min.value()}\n")
             for det, view in self.views.items():
                 f.write(f"# {det} ROIs: {view.panel.to_json().replace(chr(10), ' ')}\n")
@@ -2451,7 +2491,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             g["traces"][sr["name"]] = dict(raw=sr["raw"], norm=sr["norm"])
             g["per_run"][sr["name"]] = sr["per_run"]
         mode, brun = self.bkg_mode()
-        meta = dict(proposal=int(self.cfg.proposal or 0), normalisation=self.cmb_norm.currentText(),
+        meta = dict(proposal=int(self.cfg.proposal or 0), normalisation=self.norm_label(),
                     mad_cut=float(self.sp_mad.value()), min_over_median=float(self.sp_min.value()),
                     drop_nonpositive=int(self.cb_pos.isChecked()),
                     background=f"run {brun}" if mode == "run" else mode, roi_value=self.cmb_value.currentText(),
