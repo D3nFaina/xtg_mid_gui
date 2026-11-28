@@ -167,3 +167,16 @@ def test_photonize():
     p = an.photonize(a, 9.0)
     assert np.isnan(p[0]) and np.isnan(p[-1])
     assert list(p[1:-1]) == [0, 0, 1, 1, 2, 2]
+
+
+def test_reduce_pulses_single_cell_and_scale():
+    from xtg_mid_gui.backends import reduce_pulses
+    from xtg_mid_gui.config import Source
+    a = np.arange(2 * 1 * 3 * 4, dtype=np.float32).reshape(2, 1, 3, 4)
+    a[0, 0, 0, 0] = np.nan
+    r = reduce_pulses(a, Source("s", "k"), 2)
+    assert r.shape == (2, 3, 4) and np.isnan(r[0, 0, 0]) and np.array_equal(r[1], a[1, 0])
+    r = reduce_pulses(a, Source("s", "k", scale=2.0, offset=1.0), 2)
+    assert np.allclose(r[1], a[1, 0] * 2 + 1)
+    b = np.arange(2 * 3 * 2, dtype=np.uint16).reshape(2, 3, 2)
+    assert np.allclose(reduce_pulses(b, Source("s", "k"), 1), b.mean(axis=1))

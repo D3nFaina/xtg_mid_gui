@@ -72,6 +72,11 @@ class Backend:
     def __init__(self, cfg: SourceConfig):
         self.cfg = cfg
 
+    def run_ready(self, scan: int, quiet_s: float = 120) -> bool:
+        """True if the run can be reduced (exists, and for real data no file changed in
+        the last quiet_s seconds: not being written or calibrated any more)."""
+        return True
+
     def load_scan(self, scan: int, rois=None) -> ScanData:     # pragma: no cover - interface
         """rois=None: keep every per-train image (reference run).  rois = {detector:
         (signal geometries, background geometries)}: keep only ImageStats for those
@@ -140,6 +145,9 @@ class SimulatedBackend(Backend):
 
     def fingerprint_extra(self) -> dict:
         return dict(n_shots=self.n_shots, seed=self.seed, delays=sorted(self.delays.items()))
+
+    def run_ready(self, scan, quiet_s=120):
+        return scan in self.delays
 
     def load_scan(self, scan: int, rois=None) -> ScanData:
         if scan not in self.delays:
@@ -279,14 +287,26 @@ def reduce_pulses(a: np.ndarray, src: Source, image_ndim: int = 0) -> np.ndarray
     ``image_ndim`` = trailing axes that belong to the value itself (2 for images).
     """
     a = np.asarray(a)
+    out_dt = np.float32 if image_ndim else np.float64
+
+    def scaled(x):                        # no extra pass over the data when scale = 1, offset = 0
+        x = x.astype(out_dt, copy=False)
+        if src.scale != 1:
+            x = x * src.scale
+        if src.offset != 0:
+            x = x + src.offset
+        return x
+
     extra = a.ndim - 1 - image_ndim
     if extra <= 0:
-        return a.astype(np.float32 if image_ndim else np.float64) * src.scale + src.offset
+        return scaled(a)
     if extra > 1:
         a = a.reshape(a.shape[0], -1, *a.shape[a.ndim - image_ndim:])
     if src.pulses != "all":
         lo, _, hi = src.pulses.partition(":")
         a = a[:, slice(int(lo) if lo else None, int(hi) if hi else None)]
+    if a.shape[1] == 1:                   # one pulse / memory cell (Jungfrau): nothing to average
+        return scaled(a[:, 0])
     if a.dtype.kind == "f":               # nan-sum / nan-mean without the copies np.nanmean makes
         fin = ~np.isnan(a)
         out = np.sum(a, axis=1, where=fin, dtype=np.float64 if not image_ndim else a.dtype)
@@ -295,7 +315,7 @@ def reduce_pulses(a: np.ndarray, src: Source, image_ndim: int = 0) -> np.ndarray
                 out = out / fin.sum(axis=1)
     else:
         out = a.sum(axis=1) if src.reduce == "sum" else a.mean(axis=1)
-    return out.astype(np.float32 if image_ndim else np.float64) * src.scale + src.offset
+    return scaled(out)
 
 
 CHUNK = 32                     # trains read at a time from the run files
@@ -334,6 +354,24 @@ class ExtraDataBackend(Backend):
         kd = run[cfg.param.source, cfg.param.key]
         t, a = per_train_mean(kd.train_id_coordinates(), reduce_pulses(kd.ndarray(), cfg.param))
         return match_trains(t, a, trains)
+
+    def run_folders(self, scan):
+        """Folders of the run's files (raw and/or proc, as cfg.data)."""
+        from pathlib import Path
+        from extra_data.read_machinery import find_proposal
+        prop = Path(find_proposal(f"p{int(self.cfg.proposal):06d}"))
+        kinds = ("raw", "proc") if self.cfg.data == "all" else (self.cfg.data,)
+        return [prop / k / f"r{int(scan):04d}" for k in kinds]
+
+    def run_ready(self, scan, quiet_s=120):
+        import time
+        newest = 0.0
+        for d in self.run_folders(scan):
+            files = list(d.glob("*.h5")) if d.is_dir() else []
+            if not files:
+                return False
+            newest = max([newest] + [f.stat().st_mtime for f in files])
+        return time.time() - newest > quiet_s
 
     def load_scan(self, scan: int, rois=None) -> ScanData:
         import extra_data as ex

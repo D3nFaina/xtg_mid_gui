@@ -9,6 +9,12 @@ many cores before or while the GUI is open::
 
 A run that is already reduced with the same settings and ROIs is skipped; a run whose
 cache lacks some ROIs only gets those added.  The GUI then loads all of them in seconds.
+
+During the beamtime, leave it running with --watch: every --every seconds it reduces the
+runs of --runs that have appeared (files unchanged for --quiet seconds) and brings all of
+them up to the ROIs last saved by the GUI::
+
+    python -m xtg_mid_gui.compute --preset 11456 --runs 1-300 --watch --workers 16
 """
 from __future__ import annotations
 
@@ -85,6 +91,42 @@ def ensure_many(backend, scans, rois=None, force=False, detectors=None, workers=
     yield from run_jobs(backend, jobs, here, _ensure_one, workers=workers, tick=tick)
 
 
+def watch(backend, runs, get_rois, detectors=None, workers=None, every=30.0, quiet=120.0, cycles=None):
+    """Reduce `runs` as they appear and keep them up to date with get_rois() (re-read every
+    cycle, so ROIs saved by the GUI are followed).  cycles: stop after that many (tests)."""
+    done, failed, n = set(), {}, 0
+    print(f"watching {len(runs)} runs every {every:g} s (Ctrl-C stops)", flush=True)
+    try:
+        while cycles is None or n < cycles:
+            n += 1
+            rois = get_rois()
+            ready = [r for r in runs if r in done or _ready(backend, r, quiet)]
+            t0 = time.time()
+            for s, info in ensure_many(backend, ready, rois, detectors=detectors, workers=workers):
+                if isinstance(info, Exception):
+                    if str(info) != failed.get(s):
+                        print(f"run {s}: {type(info).__name__}: {info}", flush=True)
+                    failed[s] = str(info)
+                    continue
+                failed.pop(s, None)
+                done.add(s)
+                if info["did"] != "cached":
+                    print(f"run {s}: {info['did']:<6} ({time.time() - t0:.0f} s)  {time.strftime('%H:%M:%S')}",
+                          flush=True)
+            if cycles is None or n < cycles:
+                time.sleep(every)
+    except KeyboardInterrupt:
+        print("stopped", flush=True)
+    return 0
+
+
+def _ready(backend, run, quiet):
+    try:
+        return backend.run_ready(run, quiet)
+    except Exception:          # noqa: BLE001 - not there (yet)
+        return False
+
+
 # ---------------------------------------------------------------- command line
 def main(argv=None):
     import argparse
@@ -103,6 +145,11 @@ def main(argv=None):
     ap.add_argument("--detectors", help="only these detectors, e.g. 'jf1' (default: all)")
     ap.add_argument("--workers", type=int, help="parallel readers (default: half the cores, max 8)")
     ap.add_argument("--force", action="store_true", help="read the runs again even if cached")
+    ap.add_argument("--watch", action="store_true",
+                    help="keep running: reduce the runs as they appear, follow the GUI's ROIs (Ctrl-C stops)")
+    ap.add_argument("--every", type=float, default=30, help="--watch: seconds between checks (default 30)")
+    ap.add_argument("--quiet", type=float, default=120,
+                    help="--watch: a run is reduced once its files are unchanged this many seconds (default 120)")
     args = ap.parse_args(argv)
     preset = args.preset or ((preset_of_file(args.config) or "custom") if args.config else
                              str(args.proposal) if str(args.proposal) in ("7016", "11456") else "11456")
@@ -113,6 +160,9 @@ def main(argv=None):
     dets = args.detectors.replace(",", " ").split() if args.detectors else None
     rois = roidb.spec_for_cli(cfg, args.rois, args.roi_run)
     runs = parse_scans(args.runs)
+    if args.watch:
+        return watch(be, runs, lambda: roidb.spec_for_cli(cfg, args.rois, args.roi_run, quiet=True), dets,
+                     args.workers, args.every, args.quiet)
     t0 = time.time()
     n_bad = 0
     for s, info in ensure_many(be, runs, rois, args.force, dets, workers=args.workers):

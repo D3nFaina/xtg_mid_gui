@@ -207,3 +207,40 @@ def test_background_rois_in_fit_compare_and_export(tmp_path, monkeypatch):
     w.export_h5(out)
     assert name in export.traces(out, w.cfg.detectors[det].label)
     w.close()
+
+
+def test_other_runs_reduced_while_the_reference_is_read(tmp_path, monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("pyqtgraph")
+    monkeypatch.setenv("XTG_MID_START_DIR", str(tmp_path))
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841
+    w = XTGMidWindow(sim_kw=dict(n_shots=10))
+    w.load([101, 102, 103])                                # first time: ROIs placed on the reference first
+    ref = {k: v["raw"][1].copy() for k, v in w.series.items()}
+    started = []
+    orig = w._start_reduce
+    monkeypatch.setattr(w, "_start_reduce", lambda *a, **k: started.append(a) or orig(*a, **k))
+    w._force_read = True                                   # read everything again, in parallel
+    w.load([101, 102, 103])
+    assert started and started[0][0] == [102, 103]
+    for k, v in w.series.items():
+        assert np.allclose(v["raw"][1], ref[k])
+    w.close()
+
+
+def test_watch_reduces_new_runs_and_follows_the_gui_rois():
+    be = _be()
+    rois = [{"jf1": ([G], [])}]
+    ready = {121}
+    be.run_ready = lambda s, q=0: s in ready
+    compute.watch(be, [121, 122], lambda: rois[0], every=0, cycles=1)
+    p201 = store.run_path(be.cfg, be.name, 121)
+    assert p201.is_file() and not store.run_path(be.cfg, be.name, 122).is_file()
+    ready.add(122)                                          # run 122 written meanwhile
+    rois[0] = {"jf1": ([G, G2], [])}                        # and the GUI saved a new ROI
+    compute.watch(be, [121, 122], lambda: rois[0], every=0, cycles=1)
+    for s in (121, 122):
+        st = store.load_light(store.run_path(be.cfg, be.name, s)).stats["jf1"]
+        assert st.signal(G2, []) is not None

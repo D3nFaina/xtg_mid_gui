@@ -110,7 +110,7 @@ def read_roi_file(path) -> dict:
     return d
 
 
-def spec_for_cli(cfg, path=None, run=None) -> dict:
+def spec_for_cli(cfg, path=None, run=None, quiet=False) -> dict:
     """ROIs for the command-line reducer: run's ROIs from the database, a file, or the last ROIs."""
     if run is not None:
         det_rois = for_run(cfg.proposal, run)
@@ -120,6 +120,6 @@ def spec_for_cli(cfg, path=None, run=None) -> dict:
         det_rois = read_roi_file(path)
     else:
         det_rois = last(cfg.proposal)
-        if not det_rois:
+        if not det_rois and not quiet:
             print(f"no ROIs in {path_for(cfg.proposal)}: only the per-run numbers and mean images are made")
     return spec_from_dicts(det_rois)
