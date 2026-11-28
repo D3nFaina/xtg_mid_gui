@@ -188,3 +188,15 @@ DEFAULT_CMAP = {"dark": "viridis", "light": "white → blue"}
 
 def colormap(name):
     return COLORMAPS.get(name, COLORMAPS["viridis"])()
+
+
+def error_bars(t, y, e, color, alpha=230, width=1.5):
+    """Error bars (±e) with short caps, drawn opaque enough to be seen next to the markers."""
+    import numpy as np
+    t, y, e = (np.asarray(a, float) for a in (t, y, e))
+    ts = np.unique(t[np.isfinite(t)])
+    gap = np.min(np.diff(ts)) if len(ts) > 1 else (abs(ts[0]) or 1.0) if len(ts) else 1.0
+    span = (ts[-1] - ts[0]) if len(ts) > 1 else gap
+    beam = min(0.4 * gap, 0.015 * span) if span > 0 else 0.0
+    return pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), beam=beam,
+                           pen=pg.mkPen(tuple(color[:3]) + (alpha,), width=width))

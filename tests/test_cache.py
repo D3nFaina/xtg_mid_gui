@@ -113,7 +113,7 @@ def test_gui_uses_cache_and_remembers_rois():
     assert w2.views["jf1"].panel.rois[0].geometry() == moved          # last ROIs come back
     assert w2.cmb_roirun.count() == 3
     w2.views["jf1"].panel.rois[0].item.setPos(pg_point(1, 1))
-    w2.use_rois_of_run(101)
+    w2.use_rois_of_run(102)                                            # 102: last analysed in the first session
     assert w2.views["jf1"].panel.rois[0].geometry() == moved
     w2.close()
 
@@ -139,3 +139,40 @@ def test_mean_image_follows_a_file_rewritten_by_a_worker():
             got = store.load_light(out[s]["path"]).mean_image(det)
             ref = be.load_scan(s, rois=compute.full_rois(cfg)).mean_image(det)      # read here
             assert np.allclose(got, ref, atol=1e-4, equal_nan=True), (tiles, s)
+
+
+def test_gui_remembers_agipd_tiles_with_the_rois(tmp_path, monkeypatch):
+    """p7016: the ROIs sit on stacked tiles, so the tiles come back with them (closing the
+    GUI, 'ROIs of run', and 'From file…' on an exported .h5)."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("pyqtgraph")
+    monkeypatch.setenv("XTG_MID_START_DIR", str(tmp_path))
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui.config import config_for
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841
+    w = XTGMidWindow(config_for("7016"), sim_kw=dict(n_shots=10))
+    w.load([101, 102])
+    w.set_tiles([9, 8, 15])
+    roi = w.views["agipd_sub"].panel.rois[0]
+    roi.item.setPos(roi.item.pos() + pg_point(4, 3))
+    moved = roi.geometry()
+    out = tmp_path / "exp.h5"
+    w.export_h5(out)
+    w.close()
+    w2 = XTGMidWindow(config_for("7016"), sim_kw=dict(n_shots=10))
+    assert w2.cfg.detectors["agipd_sub"].tiles == [9, 8, 15]
+    assert w2.mosaic.chosen() == [9, 8, 15]
+    assert w2.views["agipd_sub"].panel.rois[0].geometry() == moved
+    w2.load([101])
+    assert w2.views["agipd_sub"].panel.rois[0].geometry() == moved
+    w2.set_tiles([8, 10, 15])
+    w2.views["agipd_sub"].panel.rois[0].item.setPos(pg_point(1, 1))
+    w2.rois_from_file(str(out))                                         # from the exported file
+    assert w2.cfg.detectors["agipd_sub"].tiles == [9, 8, 15]
+    assert w2.views["agipd_sub"].panel.rois[0].geometry() == moved
+    w2.set_tiles([8, 10, 15])
+    w2.use_rois_of_run(102)                                            # 102: last analysed in the first session
+    assert w2.cfg.detectors["agipd_sub"].tiles == [9, 8, 15]
+    assert w2.views["agipd_sub"].panel.rois[0].geometry() == moved
+    w2.close()
