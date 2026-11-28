@@ -370,7 +370,6 @@ def test_background_trace_and_hiding_rescales(win):
         if it.name() != keep:
             it.setVisible(False)                 # = clicking its legend entry
             assert not it._eb.isVisible()
-    vb.updateAutoRange()
     top = vb.viewRange()[1][1]
     s = w.series[keep]["raw"]
     assert top < 1.3 * np.nanmax(np.asarray(s[1]) + np.asarray(s[2]))
@@ -380,3 +379,17 @@ def test_background_trace_and_hiding_rescales(win):
     for it in w.p_raw.listDataItems():
         it.setVisible(True)
     assert not w._hidden
+
+
+def test_contrast_levels_and_home(win):
+    from xtg_mid_gui.gui import ImagePane
+    rng = np.random.default_rng(0)
+    im = rng.normal(10, 1, (200, 200))
+    im[100:104, 100:104] += 5                    # faint spot, 5 noise widths
+    im[20:30, 20:30] += 1000                     # bright Bragg peak
+    lo, hi = ImagePane.contrast_levels(im)
+    assert 7 < lo < 9 and 11 < hi < 16 < 1000    # background spans the scale, faint spot (15) at the top, Bragg saturates
+    v = win.views["jf1"]
+    v.img.setLevels((0, 1))
+    v.home()
+    assert tuple(np.round(v.img.levels, 6)) == tuple(np.round(ImagePane.contrast_levels(v.img.image), 6))

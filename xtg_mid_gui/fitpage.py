@@ -59,7 +59,7 @@ class FitPage(QtWidgets.QWidget):
         lay.addWidget(self.inner)
         split.addWidget(self._build_controls())
         split.addWidget(self._build_plots())
-        split.setSizes([360, 1000])
+        split.setSizes([300, 1060])
 
     # ============================================================ controls
     def _build_controls(self):
@@ -80,10 +80,7 @@ class FitPage(QtWidgets.QWidget):
         self.sp_tmax = _spin(-1e4, 1e4, 10.0, 0.05, 3)
         b_full = QtWidgets.QPushButton("full range")
         b_full.clicked.connect(self._full_range)
-        rng = QtWidgets.QHBoxLayout()
-        rng.addWidget(self.sp_tmin)
-        rng.addWidget(_label("to", "muted", wrap=False))
-        rng.addWidget(self.sp_tmax)
+
         self.cmb_src = QtWidgets.QComboBox()
         self.cmb_src.addItem(SESSION)
         self.cmb_src.setToolTip("fit the delay series computed now, or one saved with Export (.h5)")
@@ -99,7 +96,8 @@ class FitPage(QtWidgets.QWidget):
         self.cmb_det.currentIndexChanged.connect(lambda *_: (self._fill_rois(), self._data_changed()))
         f.addRow("ROI curve", self.cmb_roi)
         f.addRow("series", self.cmb_curve)
-        f.addRow("fit range (ps)", rng)
+        f.addRow("fit from (ps)", self.sp_tmin)
+        f.addRow("fit to (ps)", self.sp_tmax)
         f.addRow("", b_full)
         c.body.addWidget(self.chk_scale)
         for w in (self.cmb_roi, self.cmb_curve):
@@ -158,7 +156,7 @@ class FitPage(QtWidgets.QWidget):
         self.b_guess = QtWidgets.QPushButton("Guess ν from FFT")
         self.b_use = QtWidgets.QPushButton("Results → start")
         self.b_reset = QtWidgets.QPushButton("Reset")
-        for bs in ((self.b_fit, self.b_th), (self.b_guess, self.b_use, self.b_reset)):
+        for bs in ((self.b_fit, self.b_th), (self.b_guess, self.b_use), (self.b_reset,)):
             row = QtWidgets.QHBoxLayout()
             for b in bs:
                 row.addWidget(b)
@@ -179,9 +177,9 @@ class FitPage(QtWidgets.QWidget):
         self.sp_fft_tmin.setToolTip("only points with t ≥ this go into the FFTs (the notebook's 'cut')")
         self.sp_step = _spin(0, 1e5, 0, 5, 1)
         self.sp_step.setSpecialValueText("auto (median step)")
-        self.sp_step.setToolTip("even grid step for the interpolation before the FFT (fs)")
-        f.addRow("FFT from t ≥ (ps)", self.sp_fft_tmin)
-        f.addRow("interpolation step (fs)", self.sp_step)
+        self.sp_step.setToolTip("even grid step for the interpolation before the FFT (fs); 0 = median step")
+        f.addRow("FFT from (ps)", self.sp_fft_tmin)
+        f.addRow("grid step (fs)", self.sp_step)
         for w in (self.sp_fft_tmin, self.sp_step):
             w.valueChanged.connect(lambda *_: self.draw())
         v.addWidget(c)
@@ -189,7 +187,7 @@ class FitPage(QtWidgets.QWidget):
         sc = QtWidgets.QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(side)
-        sc.setMinimumWidth(360)
+        sc.setMinimumWidth(292)
         sc.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self._rebuild_table()
         return sc

@@ -94,6 +94,12 @@ class ImagePane(QtWidgets.QWidget):
         top.addWidget(_label("image:", "muted", wrap=False))
         self.source = ShrinkCombo(220, 100)
         top.addWidget(self.source)
+        self.b_home = QtWidgets.QPushButton("⌂")
+        self.b_home.setToolTip("Home: whole image, and the colour scale back to the contrast-optimised\n"
+                               "levels (background to just above the brightest features)")
+        self.b_home.setFixedWidth(34)
+        self.b_home.clicked.connect(self.home)
+        top.addWidget(self.b_home)
         self.b_full = QtWidgets.QPushButton("⤢  Full page")
         self.b_full.setToolTip(full_tip)
         top.addWidget(self.b_full)
@@ -141,15 +147,47 @@ class ImagePane(QtWidgets.QWidget):
         shown = self.log_image(im) if self.log_scale else im
         relevel = self._first or getattr(self, "_relevel", False)
         self.img.setImage(shown, autoLevels=False)
-        if relevel and np.isfinite(shown).any():
-            lo, hi = np.nanpercentile(shown, [1, 99.7])
-            self.img.setLevels((lo, hi))
-            self.lut.setLevels(lo, hi)
-            self._relevel = False
+        if relevel:
+            self.auto_levels()
         if self._first:
             self.plot.autoRange()
         self._after_image(im)
         self._first = False
+
+    @staticmethod
+    def contrast_levels(im):
+        """Colour levels for faint features: from the background (median - 2 noise widths) up to
+        25 noise widths above it (at most the 99.5th percentile), so weak spots a few noise widths
+        above the background are clearly visible and bright Bragg / hot pixels simply saturate."""
+        v = np.asarray(im, float)
+        v = v[np.isfinite(v)]
+        if v.size == 0:
+            return None
+        med = np.median(v)
+        noise = 1.4826 * np.median(np.abs(v - med))
+        lo = max(float(np.percentile(v, 0.5)), med - 2 * noise)
+        hi = float(np.percentile(v, 99.5))
+        if noise > 0:
+            hi = min(hi, med + 25 * noise)
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max())
+        if hi <= lo:
+            hi = lo + 1.0
+        return lo, hi
+
+    def auto_levels(self):
+        im = self.img.image
+        lv = None if im is None else self.contrast_levels(im)
+        if lv is not None:
+            self.img.setLevels(lv)
+            self.lut.setLevels(*lv)
+            self.lut.setHistogramRange(*lv, padding=0.1)
+        self._relevel = False
+
+    def home(self):
+        """Back to the start: whole image in view, contrast-optimised colour levels."""
+        self.auto_levels()
+        self.plot.autoRange()
 
     def _after_image(self, im):
         pass
@@ -1873,12 +1911,33 @@ class XTGMidWindow(QtWidgets.QMainWindow):
         c = p.plot(t, y, pen=pg.mkPen(color, width=1, style=style), symbol="o", symbolSize=4,
                    symbolBrush=color, symbolPen=None, name=name)
         c._eb = eb
+        c._ylims = (np.asarray(y, float) - np.nan_to_num(e), np.asarray(y, float) + np.nan_to_num(e))
 
         def shown():
             eb.setVisible(c.isVisible())
-            p.enableAutoRange(axis="y")
+            self.rescale_y(p)
         c.visibleChanged.connect(shown)
         return c
+
+    @staticmethod
+    def rescale_y(p):
+        """y axis of plot p to the curves (with error bars) that are shown; x is left alone."""
+        lo, hi = [], []
+        for it in p.listDataItems():
+            lims = getattr(it, "_ylims", None)
+            if it.isVisible() and lims is not None:
+                lo.append(lims[0])
+                hi.append(lims[1])
+        if not lo:
+            return
+        lo, hi = np.concatenate(lo), np.concatenate(hi)
+        ok = np.isfinite(lo) & np.isfinite(hi)
+        if not ok.any():
+            return
+        a, b = float(lo[ok].min()), float(hi[ok].max())
+        if b <= a:
+            a, b = a - 0.5, b + 0.5
+        p.getViewBox().setYRange(a, b, padding=0.05)
 
     def _draw_delay(self, scans):
         for p in (self.p_raw, self.p_norm, self.p_diode):
@@ -1902,6 +1961,8 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             a.visibleChanged.connect(sync)
             if label in hidden:
                 a.setVisible(False)
+        for p in (self.p_raw, self.p_norm, self.p_diode):   # fit the curves shown, also after a ROI is switched off
+            self.rescale_y(p)
         delays = [self.scans[s].delay for s in scans]
         for name, attr, color in (("pump", "pump", theme.PUMP), ("probe", "probe", theme.PROBE)):
             vals = [self.inten(s, attr)[self.keep[s]] for s in scans]
