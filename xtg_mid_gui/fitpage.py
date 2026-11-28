@@ -33,6 +33,13 @@ def _num(text, default):
         return default
 
 
+def _narrow(*combos):
+    """Combo boxes that may get narrower than their longest item (long file / mode names)."""
+    for c in combos:
+        c.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        c.setMinimumContentsLength(8)
+
+
 class FitPage(QtWidgets.QWidget):
     def __init__(self, win):
         super().__init__()
@@ -52,7 +59,7 @@ class FitPage(QtWidgets.QWidget):
         lay.addWidget(self.inner)
         split.addWidget(self._build_controls())
         split.addWidget(self._build_plots())
-        split.setSizes([470, 830])
+        split.setSizes([360, 1000])
 
     # ============================================================ controls
     def _build_controls(self):
@@ -77,24 +84,23 @@ class FitPage(QtWidgets.QWidget):
         rng.addWidget(self.sp_tmin)
         rng.addWidget(_label("to", "muted", wrap=False))
         rng.addWidget(self.sp_tmax)
-        rng.addWidget(b_full)
         self.cmb_src = QtWidgets.QComboBox()
         self.cmb_src.addItem(SESSION)
         self.cmb_src.setToolTip("fit the delay series computed now, or one saved with Export (.h5)")
         b_open = QtWidgets.QPushButton("Open file…")
         b_open.clicked.connect(self.choose_file)
-        srow = QtWidgets.QHBoxLayout()
-        srow.addWidget(self.cmb_src, 1)
-        srow.addWidget(b_open)
         self.cmb_det = QtWidgets.QComboBox()
         self.cmb_det.setToolTip("detector of the saved file")
-        f.addRow("data from", srow)
+        _narrow(self.cmb_src, self.cmb_det, self.cmb_roi, self.cmb_curve)
+        f.addRow("data from", self.cmb_src)
+        f.addRow("", b_open)
         f.addRow("detector", self.cmb_det)
         self.cmb_src.currentIndexChanged.connect(lambda *_: self._source_changed())
         self.cmb_det.currentIndexChanged.connect(lambda *_: (self._fill_rois(), self._data_changed()))
         f.addRow("ROI curve", self.cmb_roi)
         f.addRow("series", self.cmb_curve)
         f.addRow("fit range (ps)", rng)
+        f.addRow("", b_full)
         c.body.addWidget(self.chk_scale)
         for w in (self.cmb_roi, self.cmb_curve):
             w.currentTextChanged.connect(lambda *_: self._data_changed())
@@ -126,7 +132,8 @@ class FitPage(QtWidgets.QWidget):
         row.addStretch(1)
         c.body.addLayout(row)
         self._show_damp_boxes(self.spec.n_osc)
-        self.chk_harm = QtWidgets.QCheckBox("+ 2nd harmonic of ν1, damped with τ/2 (freq3_dump2_2nd_harm)")
+        self.chk_harm = QtWidgets.QCheckBox("+ 2nd harmonic of ν1 (damped, τ/2)")
+        self.chk_harm.setToolTip("2nd harmonic of ν1, damped with τ/2 (notebook: freq3_dump2_2nd_harm)")
         c.body.addWidget(self.chk_harm)
         c.body.addWidget(_label(
             "S(t) = | ½[1+erf((t−t0)/σ)] · ( a_exp e^(−(t−t0)/τ) − Σ aᵢ sin(2πνᵢ(t−t0)+φᵢ) [e^(−(t−t0)/τᵢ)] + y0 ) |²",
@@ -136,7 +143,7 @@ class FitPage(QtWidgets.QWidget):
             ch.toggled.connect(self._model_changed)
         v.addWidget(c)
 
-        c = Card("Parameters: start value and bounds")
+        c = Card("Parameters")
         self.table = QtWidgets.QTableWidget(0, len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
         self.table.verticalHeader().setVisible(False)
@@ -146,15 +153,16 @@ class FitPage(QtWidgets.QWidget):
         self.table.setMinimumHeight(330)
         self.table.itemChanged.connect(self._table_edited)
         c.body.addWidget(self.table)
-        row = QtWidgets.QHBoxLayout()
         self.b_fit = QtWidgets.QPushButton("Fit", objectName="primary")
         self.b_th = QtWidgets.QPushButton("Fit thermal only")
         self.b_guess = QtWidgets.QPushButton("Guess ν from FFT")
         self.b_use = QtWidgets.QPushButton("Results → start")
         self.b_reset = QtWidgets.QPushButton("Reset")
-        for b in (self.b_fit, self.b_th, self.b_guess, self.b_use, self.b_reset):
-            row.addWidget(b)
-        c.body.addLayout(row)
+        for bs in ((self.b_fit, self.b_th), (self.b_guess, self.b_use, self.b_reset)):
+            row = QtWidgets.QHBoxLayout()
+            for b in bs:
+                row.addWidget(b)
+            c.body.addLayout(row)
         self.b_fit.clicked.connect(lambda: self.run_fit(False))
         self.b_th.clicked.connect(lambda: self.run_fit(True))
         self.b_guess.clicked.connect(self.guess_nu)
@@ -181,7 +189,8 @@ class FitPage(QtWidgets.QWidget):
         sc = QtWidgets.QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(side)
-        sc.setMinimumWidth(440)
+        sc.setMinimumWidth(360)
+        sc.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self._rebuild_table()
         return sc
 
@@ -555,10 +564,8 @@ class ComparePanel(QtWidgets.QWidget):
         self.cmb_src.addItem(SESSION)
         b_open = QtWidgets.QPushButton("Open file…")
         b_open.clicked.connect(self.choose_file)
-        srow = QtWidgets.QHBoxLayout()
-        srow.addWidget(self.cmb_src, 1)
-        srow.addWidget(b_open)
-        f.addRow("from", srow)
+        f.addRow("from", self.cmb_src)
+        f.addRow("", b_open)
         self.cmb_det = QtWidgets.QComboBox()
         f.addRow("detector", self.cmb_det)
         self.cmb_roi = QtWidgets.QComboBox()
@@ -602,13 +609,12 @@ class ComparePanel(QtWidgets.QWidget):
         self.cmb_series.setToolTip("normalised = divided by the pump / probe normaliser chosen when computed")
         self.sp_t1 = _spin(-1e6, 1e6, 0, 10, 1)
         self.sp_t2 = _spin(-1e6, 1e6, 500, 10, 1)
-        rng = QtWidgets.QHBoxLayout()
-        rng.addWidget(self.sp_t1)
-        rng.addWidget(_label("to", "muted", wrap=False))
-        rng.addWidget(self.sp_t2)
+        _narrow(self.cmb_src, self.cmb_det, self.cmb_roi, self.cmb_mode, self.cmb_series)
+        self.cmb_mode.setToolTip("\n".join(an.COMPARE_MODES))
         f.addRow("mode", self.cmb_mode)
         f.addRow("series", self.cmb_series)
-        f.addRow("peak range (fs)", rng)
+        f.addRow("peak from (fs)", self.sp_t1)
+        f.addRow("peak to (fs)", self.sp_t2)
         self.lbl_info = _label("", "muted")
         f.addRow(self.lbl_info)
         for w in (self.cmb_mode, self.cmb_series):
@@ -620,7 +626,8 @@ class ComparePanel(QtWidgets.QWidget):
         sc = QtWidgets.QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(side)
-        sc.setMinimumWidth(430)
+        sc.setMinimumWidth(260)
+        sc.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         split.addWidget(sc)
         g = theme.register_widget(pg.GraphicsLayoutWidget())
         self.plot = theme.style_plot(g.addPlot(), "Compared traces", "delay (fs)", "signal")
@@ -630,7 +637,7 @@ class ComparePanel(QtWidgets.QWidget):
         self.region.setZValue(-10)
         self.region.sigRegionChangeFinished.connect(self._region_moved)
         split.addWidget(g)
-        split.setSizes([450, 850])
+        split.setSizes([280, 1080])
         self._src_changed()
 
     # ------------------------------------------------------------ sources

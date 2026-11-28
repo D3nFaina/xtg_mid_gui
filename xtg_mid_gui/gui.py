@@ -221,7 +221,7 @@ class MosaicView(ImagePane):
 
     def toggle_tile(self, t):
         cur = self.chosen()
-        cur = sorted(set(cur) ^ {t})
+        cur = [c for c in cur if c != t] if t in cur else cur + [t]      # keep the click order
         self.ed_tiles.setText(" ".join(map(str, cur)))
 
     def _clicked(self, ev):
@@ -629,7 +629,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
 
     def set_tiles(self, tiles):
         """New AGIPD tile subset: re-read the loaded scans with these tiles."""
-        tiles = sorted(set(tiles))
+        tiles = list(dict.fromkeys(tiles))           # stacked top to bottom in this order
         if not tiles:
             self.log("choose at least one AGIPD tile")
             return
@@ -1848,21 +1848,60 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                                       norm=an.delay_series(delays, sig, nrm), color=roi.color,
                                       det=det, dash=det != next(iter(self.views)), per_run=per_run,
                                       name=re.sub(r" \[[^\]]*\]", "", label))
+        self.bkg_series = {}
+        multi = len([d for d in self.views if self.cfg.active(d)]) > 1
+        for det, view in self.views.items():
+            if not self.cfg.active(det):
+                continue
+            for roi in view.panel.rois:
+                if not (roi.background and roi.enabled):
+                    continue
+                label = f"bkg: {roi.name}" + (f" [{self.cfg.detectors[det].label.replace('Jung_', '')}]" if multi else "")
+                sig = [self._roi_values(det, s, roi, ())[self.keep[s]] for s in scans]
+                nrm = [an.normaliser(norm, self.inten(s, 'pump'), self.inten(s, 'probe'))[self.keep[s]] for s in scans]
+                self.bkg_series[label] = dict(raw=an.delay_series(delays, sig, [np.ones_like(x) for x in sig]),
+                                              norm=an.delay_series(delays, sig, nrm), color=roi.color)
 
-    def _curve(self, p, t, y, e, color, name, dash=False):
+    def _curve(self, p, t, y, e, color, name, dash=False, style=None):
+        """Data points + error bars.  Hiding the curve (click its legend entry) hides its error
+        bars too and rescales the y axis to the curves still shown."""
         if len(t) == 0:
-            return
-        style = QtCore.Qt.DashLine if dash else QtCore.Qt.SolidLine
-        p.addItem(pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), pen=pg.mkPen(color + (150,), width=1)))
-        p.plot(t, y, pen=pg.mkPen(color, width=1, style=style), symbol="o", symbolSize=4,
-               symbolBrush=color, symbolPen=None, name=name)
+            return None
+        style = style or (QtCore.Qt.DashLine if dash else QtCore.Qt.SolidLine)
+        eb = pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), pen=pg.mkPen(color + (150,), width=1))
+        p.addItem(eb)
+        c = p.plot(t, y, pen=pg.mkPen(color, width=1, style=style), symbol="o", symbolSize=4,
+                   symbolBrush=color, symbolPen=None, name=name)
+        c._eb = eb
+
+        def shown():
+            eb.setVisible(c.isVisible())
+            p.enableAutoRange(axis="y")
+        c.visibleChanged.connect(shown)
+        return c
 
     def _draw_delay(self, scans):
         for p in (self.p_raw, self.p_norm, self.p_diode):
             p.clear()
-        for label, s in self.series.items():
-            self._curve(self.p_raw, *s["raw"][:3], s["color"], label, s["dash"])
-            self._curve(self.p_norm, *s["norm"][:3], s["color"], label, s["dash"])
+        hidden = self._hidden = getattr(self, "_hidden", set())
+        pairs = []
+        rows = [(label, s, None) for label, s in self.series.items()]
+        rows += [(label, s, QtCore.Qt.DotLine) for label, s in getattr(self, "bkg_series", {}).items()]
+        for label, s, style in rows:
+            a = self._curve(self.p_raw, *s["raw"][:3], s["color"], label, s.get("dash", False), style)
+            b = self._curve(self.p_norm, *s["norm"][:3], s["color"], label, s.get("dash", False), style)
+            pairs.append((label, a, b))
+        for label, a, b in pairs:               # legend click on the top plot: same curve below too
+            if a is None:
+                continue
+
+            def sync(label=label, a=a, b=b):
+                (hidden.discard if a.isVisible() else hidden.add)(label)
+                if b is not None and b.isVisible() != a.isVisible():
+                    b.setVisible(a.isVisible())
+            a.visibleChanged.connect(sync)
+            if label in hidden:
+                a.setVisible(False)
         delays = [self.scans[s].delay for s in scans]
         for name, attr, color in (("pump", "pump", theme.PUMP), ("probe", "probe", theme.PROBE)):
             vals = [self.inten(s, attr)[self.keep[s]] for s in scans]

@@ -89,7 +89,7 @@ def module_at(row: float, col: float):
 def stack_origins(tiles) -> dict:
     """Top-left (row, col) of each chosen tile in the stacked analysis image."""
     mh = TILE_SHAPE[1]
-    return {t: (i * (mh + STACK_GAP), 0) for i, t in enumerate(sorted(set(tiles)))}
+    return {t: (i * (mh + STACK_GAP), 0) for i, t in enumerate(dict.fromkeys(tiles))}   # top to bottom as chosen
 
 
 def stack_shape(tiles) -> tuple:
@@ -99,7 +99,7 @@ def stack_shape(tiles) -> tuple:
 
 def stack(per_tile: dict, tiles) -> np.ndarray:
     """dict tile -> (n, 512, 128) per-train images  ->  (n, H, 512) stack, NaN gaps."""
-    tiles = sorted(set(tiles))
+    tiles = list(dict.fromkeys(tiles))
     n = len(next(iter(per_tile.values())))
     out = np.full((n,) + stack_shape(tiles), np.nan, np.float32)
     for t, (r0, c0) in stack_origins(tiles).items():
@@ -109,12 +109,13 @@ def stack(per_tile: dict, tiles) -> np.ndarray:
 
 
 def parse_tiles(text: str) -> list:
-    """'8 10, 15' -> [8, 10, 15] (valid tile numbers only, sorted, unique)."""
-    out = set()
+    """'9 8, 15' -> [9, 8, 15] (valid tile numbers only, unique, in the order typed:
+    that is the top-to-bottom order of the stacked analysis image)."""
+    out = []
     for tok in str(text).replace(",", " ").split():
         if "-" in tok[1:]:
             a, b = tok.split("-", 1)
-            out.update(range(int(a), int(b) + 1))
+            out.extend(range(int(a), int(b) + 1))
         else:
-            out.add(int(tok))
-    return sorted(t for t in out if 0 <= t < N_TILES)
+            out.append(int(tok))
+    return [t for t in dict.fromkeys(out) if 0 <= t < N_TILES]
