@@ -35,10 +35,14 @@ def geom_key(g):
 @dataclass
 class ImageStats:
     """What is kept of one detector of a run that is not the reference run."""
-    mean: np.ndarray                                  # (ny, nx) mean image over the run's trains
+    mean: np.ndarray | None                           # (ny, nx) mean image over the run's trains (None: on disk)
     sums: dict = field(default_factory=dict)          # geom key -> (n,) per-train ROI sum
     npx: dict = field(default_factory=dict)           # geom key -> pixels ever finite in the ROI
     pos: dict = field(default_factory=dict)           # (geom key, mode, bkg key) -> (x, y) per train
+    loader: object = field(default=None, repr=False)  # () -> mean image, when it stays in the cache file
+
+    def get_mean(self) -> np.ndarray:
+        return self.mean if self.mean is not None or self.loader is None else self.loader()
 
     def has(self, geom, bkg_geoms=()) -> bool:
         return geom_key(geom) in self.sums and all(geom_key(b) in self.sums for b in bkg_geoms)
@@ -72,7 +76,7 @@ class ImageStats:
 
     @property
     def nbytes(self) -> int:
-        return int(self.mean.nbytes + sum(a.nbytes for a in self.sums.values())
+        return int((0 if self.mean is None else self.mean.nbytes) + sum(a.nbytes for a in self.sums.values())
                    + sum(x.nbytes + y.nbytes for x, y in self.pos.values()))
 
 

@@ -2,7 +2,7 @@ proposal: 11456
 data: all
 detectors:
   jf1:
-    label: Jungfrau 1
+    label: Jung_diffraction
     data:
       source: MID_EXP_JF500K1/CORR/JNGFR01:daqOutput
       key: data.adc
@@ -15,7 +15,7 @@ detectors:
     - 1024
 
   jf2:
-    label: Jungfrau 2
+    label: Jung_transmission
     data:
       source: MID_EXP_JF500K2/CORR/JNGFR02:daqOutput
       key: data.adc

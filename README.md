@@ -91,6 +91,70 @@ bash run_xtg_mid_gui.sh   # uses `module load exfel exfel-python`, builds ../xtg
 
 It works the same way as `xtg_gui/run_xtg_gui.sh`: the venv is built with `--system-site-packages`, and only pyqtgraph gets pip-installed.
 
+## Reduced-data cache and the command-line reducer
+
+Computing and display are split. The reduction engine (`compute.py`, no Qt) reads each run
+once and writes its numbers to `reduced_<proposal>/run_<NNNN>.h5` in the start folder:
+per-train diodes, XGM, CRL, parameter, spectra, the run's mean image and, for every ROI ever
+used, the per-train ROI sums and peak positions. The GUI only says which runs and ROIs it
+wants and then reads those files, so 50 runs cost a few tens of MB of memory.
+
+- A run is read from the run files only if it has no cache file, or if the reading settings
+  changed (sources, masks, photonizing, AGIPD tiles). "Re-read masks" forces it.
+- A ROI that was never used before only adds that ROI to the file. ROIs used before (also in
+  an earlier session) cost nothing.
+- Adding runs to a list only reduces the new ones.
+- The reference run is still read with all its images (to place the ROIs); its numbers go to
+  the cache too, so changing the reference run needs no reading.
+
+You can run the engine without the GUI, e.g. on a Maxwell node with many cores, and open the
+GUI afterwards:
+
+```bash
+python -m xtg_mid_gui.compute --preset 7016 --runs "286 288-296"            # ROIs: the last ones used in the GUI
+python -m xtg_mid_gui.compute --preset 11456 --runs 20-60 --roi-run 25 --workers 16
+python -m xtg_mid_gui.compute --preset 11456 --runs 20-60 --rois my_rois.json --force
+```
+
+## ROI database
+
+Every ROI change is saved to `rois_<proposal>.json` in the start folder: the last ROIs (they
+come back when the GUI starts) and, per run, the ROIs that run was analysed with. "ROIs of run
+… → Use" in the Scans card puts back the ROIs of any run.
+
+## Exporting reduced data (.h5)
+
+The **Export (.h5)** card writes one HDF5 file (name of your choice; without a folder it goes
+into the start folder). Tick **auto-save** to write it again after every computation. The
+first time a file would be replaced you are asked once; after that the same file is
+overwritten. A manual Export into an existing file always asks.
+
+Contents (see `export.py`): per run `runs/run_NNNN/` with the delay, `pump` / `probe` (diamond
+diodes, `[mean, error, std]` over the kept shots), `spec/<name>` (e.g. HIREX integral), `xgm`,
+and `[delay, intensity, error]` per detector and ROI (normalised, and `_raw`); per detector
+(`Jung_diffraction`, `Jung_transmission`) the ROIs and, per ROI, the delay `trace` /
+`trace_raw` (`delay_fs, intensity, error, n_shots`) and `per_run` tables.
+
+```python
+import h5py
+f = h5py.File("xtg_11456_reduced.h5")
+delay, inten, err, n = f["Jung_diffraction/Bragg/trace"][()].T
+```
+
+## Fitting saved files and comparing traces
+
+- **Fitting → Fit**: "data from" is the live session or a saved file (**Open file…**); for a
+  file choose the detector and the ROI curve, then fit as before.
+- **Fitting → Compare traces**: add traces from the session (a snapshot) or from saved files,
+  tick / untick / remove them, and show them plain, normalised 0 to 1, or each divided by its
+  maximum inside a delay range (type it or drag the shaded band).
+
+## Detectors
+
+Jungfrau 1 is called **Jung_diffraction** and Jungfrau 2 **Jung_transmission** (old sources
+files with "Jungfrau 1/2" are renamed when read). **Detectors used** in the Data card picks one
+or both: an unticked detector is not read, analysed or exported (config `use_detectors`).
+
 ## Plugging in the real names
 
 1. `python -m xtg_mid_gui --write-config sources.yaml`. (`sources.example.yaml` is a copy of this output.)
@@ -107,6 +171,10 @@ The header shows how many source names are still placeholders. **Sources…** li
 |---|---|
 | `config.py` | `SourceConfig`. It is the only place where source names appear. It loads and saves YAML or JSON. |
 | `delays.py` | The run → delay file (`delays_<proposal>.csv`). |
+| `compute.py` | The reduction engine and its command line: runs + ROIs in, cache files out. |
+| `store.py` | The per-run HDF5 cache (`reduced_<proposal>/run_NNNN.h5`), lazy loading of mean images and spectra. |
+| `export.py` | The reduced-data HDF5 file: writing (Export card) and reading (Fitting page). |
+| `roidb.py` | The ROI database (`rois_<proposal>.json`): last ROIs and ROIs per run. |
 | `agipd.py` | AGIPD1M tile layout (all-tiles canvas, tile numbers, stacked analysis tiles). |
 | `roicheck.py` | ROI position check window (centre of mass / max). |
 | `presets/` | `Sources_7016.yaml` and the `Sources_11456.yaml` template. |

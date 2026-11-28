@@ -267,6 +267,20 @@ class RoiPanel(QtWidgets.QWidget):
     def to_json(self):
         return json.dumps({"detector": self.det, "rois": [s.to_dict() for s in self.rois]}, indent=2)
 
+    def to_dicts(self):
+        return [s.to_dict() for s in self.rois]
+
+    def set_dicts(self, dicts):
+        """Replace the ROIs by these (RoiSpec.to_dict dicts); one changed() at the end."""
+        self.blockSignals(True)
+        try:
+            self.clear()
+            for r in dicts:
+                self.add(RoiSpec.from_dict(r))
+        finally:
+            self.blockSignals(False)
+        self.changed.emit()
+
     def from_json(self, txt):
         d = json.loads(txt)
         self.clear()

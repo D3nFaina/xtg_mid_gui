@@ -83,7 +83,7 @@ class RoiPositionWindow(QtWidgets.QWidget):
             d = m.scans[s]
             if det in d.stats:                    # not the reference run: positions kept at load time
                 if per == "run":
-                    imgs = d.stats[det].mean[None]
+                    imgs = d.stats[det].get_mean()[None]
                 else:
                     xy = d.stats[det].position(roi.geometry(), mode, bkg)
                     if xy is None:

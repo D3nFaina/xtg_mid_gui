@@ -2,7 +2,7 @@ proposal: 0
 data: proc
 detectors:
   jf1:
-    label: Jungfrau 1
+    label: Jung_diffraction
     data:
       source: PLACEHOLDER_MID_EXP_JF1/CORR/JNGFR01:daqOutput
       key: data.adc
@@ -14,7 +14,7 @@ detectors:
     - 100
     - 160
   jf2:
-    label: Jungfrau 2
+    label: Jung_transmission
     data:
       source: PLACEHOLDER_MID_EXP_JF2/CORR/JNGFR02:daqOutput
       key: data.adc

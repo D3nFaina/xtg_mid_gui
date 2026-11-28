@@ -327,3 +327,35 @@ def roi_position(images, geom, mode="com", bkg_level=None):
         x = np.where(tot > 0, (w * xx).sum(axis=1) / tot, np.nan)
         y = np.where(tot > 0, (w * yy).sum(axis=1) / tot, np.nan)
     return x, y
+
+
+# ---------------------------------------------------------------- comparing traces
+COMPARE_MODES = ("plain (not normalised)", "normalised (0 to 1)", "normalised to the peak in a delay range")
+
+
+def normalise_trace(t, y, e, mode=0, t_range=None):
+    """Scale one delay trace for the comparison panel.
+
+    mode 0: as it is; 1: (y - min) / (max - min), so it runs from 0 to 1; 2: y / max of y
+    for delays inside t_range = (t1, t2) (same units as t).  Errors are scaled with y.
+    Returns (y, e, factor); NaN y if the scale cannot be found (e.g. no point in the range)."""
+    t, y, e = (np.asarray(a, float) for a in (t, y, e))
+    ok = np.isfinite(y)
+    nan = np.full_like(y, np.nan)
+    if mode == 0:
+        return y, e, 1.0
+    if not ok.any():
+        return nan, nan, np.nan
+    if mode == 1:
+        lo, hi = np.nanmin(y), np.nanmax(y)
+        if hi <= lo:
+            return nan, nan, np.nan
+        return (y - lo) / (hi - lo), e / (hi - lo), 1.0 / (hi - lo)
+    t1, t2 = sorted(t_range) if t_range is not None else (-np.inf, np.inf)
+    m = ok & (t >= t1) & (t <= t2)
+    if not m.any():
+        return nan, nan, np.nan
+    peak = np.max(y[m])
+    if peak <= 0:
+        return nan, nan, np.nan
+    return y / peak, e / abs(peak), 1.0 / peak
