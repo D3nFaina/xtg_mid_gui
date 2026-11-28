@@ -489,10 +489,11 @@ class FitPage(QtWidgets.QWidget):
             k = np.argsort(t_all)
             self.p_fit.plot(t_all[k], y_all[k], pen=pg.mkPen(theme.neutral(110), width=1), symbol="o", symbolSize=5,
                             symbolBrush=theme.neutral(110), symbolPen=None, name="outside fit range")
-        self.p_fit.addItem(theme.error_bars(t, y, e, sig_col))
+        eb = theme.error_bars(t, y, e, sig_col)
+        self.p_fit.addItem(eb)
         k = np.argsort(t)
-        self.p_fit.plot(t[k], y[k], pen=pg.mkPen(sig_col, width=1.5), symbol="o", symbolSize=6, symbolBrush=sig_col,
-                        symbolPen=None, name="data")
+        theme.link_error_bars(self.p_fit.plot(t[k], y[k], pen=pg.mkPen(sig_col, width=1.5), symbol="o", symbolSize=6,
+                                              symbolBrush=sig_col, symbolPen=None, name="data"), eb)
         tt = np.linspace(t.min(), t.max(), 1500)
         full, th = F.model(tt, v, self.spec), F.thermal(tt, v)
         lab = "full fit" if fitted else "start values"
@@ -793,10 +794,11 @@ class ComparePanel(QtWidgets.QWidget):
             if not np.isfinite(y).any():
                 bad.append(label)
                 continue
-            p.addItem(theme.error_bars(t, y, e, color))
+            eb = theme.error_bars(t, y, e, color)
+            p.addItem(eb)
             k = np.argsort(t)
-            p.plot(np.asarray(t)[k], np.asarray(y)[k], pen=pg.mkPen(color, width=1.5), symbol="o", symbolSize=6,
-                   symbolBrush=color, symbolPen=None, name=label)
+            theme.link_error_bars(p.plot(np.asarray(t)[k], np.asarray(y)[k], pen=pg.mkPen(color, width=1.5), symbol="o",
+                                         symbolSize=6, symbolBrush=color, symbolPen=None, name=label), eb)
         if mode == 2:
             self.region.blockSignals(True)
             self.region.setRegion((self.sp_t1.value(), self.sp_t2.value()))
