@@ -361,6 +361,9 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             h.addWidget(p)
         self.pill_ph = _label("", "tbc", wrap=False)
         h.addWidget(self.pill_ph)
+        self.pill_cells = _label("", "tbc", wrap=False)          # Jungfrau not in single-cell mode
+        self.pill_cells.setVisible(False)
+        h.addWidget(self.pill_cells)
         self.b_crl = QtWidgets.QPushButton("CRL page")
         self.b_crl.setCheckable(True)
         self.b_crl.setToolTip("Show / hide the CRL beam-pointing page")
@@ -1426,6 +1429,7 @@ class XTGMidWindow(QtWidgets.QMainWindow):
             self.log(f"{n_file} delays filled in from {self.delays_path().name}")
         self._fill_scan_table()
         self._fill_sources()
+        self._update_cells_flag()
         self.recompute()
         self.save_rois()
 
@@ -1569,6 +1573,16 @@ class XTGMidWindow(QtWidgets.QMainWindow):
                     "--config; --write-config dumps these defaults.")
         box.setDetailedText("\n".join(lines))
         box.exec_() if hasattr(box, "exec_") else box.exec()
+
+    def _update_cells_flag(self):
+        """Red flag in the header when a loaded run has a Jungfrau with more than one memory cell."""
+        from .backends import CELLS_FLAG
+        bad = {s: n for s, d in self.scans.items() for n in d.notes if n.startswith(CELLS_FLAG) and "memory cells" in n}
+        self.pill_cells.setVisible(bool(bad))
+        if bad:
+            self.pill_cells.setText(f"⚠ Jungfrau burst mode: {len(bad)} run{'s' * (len(bad) != 1)}")
+            self.pill_cells.setToolTip("More than one memory cell per train (single mode expected):\n"
+                                       + "\n".join(f"run {s}: {n}" for s, n in sorted(bad.items())))
 
     def _update_placeholder_pill(self):
         ph = self.cfg.placeholders()

@@ -304,6 +304,7 @@ def test_extra_data_photonizes_jungfrau(monkeypatch, fixed):
     assert np.isnan(im[:, 1, 1]).all() and np.isnan(im[:, 3, 5]).all()   # negative / masked
     assert np.allclose(im[:, 0, 1], 0.0)
     assert any("photonized" in n for n in d.notes)
+    assert any(n.startswith("WARNING") and "2 memory cells" in n for n in d.notes)   # 2 cells: flagged
 
 
 def test_extra_data_photonize_off_keeps_keV(monkeypatch):

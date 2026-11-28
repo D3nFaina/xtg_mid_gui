@@ -46,11 +46,12 @@ def ensure_run(backend, scan, rois=None, force=False, detectors=None):
     fp, ptag = fp_of(backend), store.param_tag(cfg)
     path = store.run_path(cfg, backend.name, scan)
     st = "none" if force else store.status(path, fp, rois)
-    did = "cached"
+    did, warnings = "cached", []
     if st == "none":
         d = backend.load_scan(scan, rois=rois)
         store.write_run(path, d, fp, ptag=ptag)
         did = "read"
+        warnings = [n for n in d.notes if n.startswith("WARNING")]
     elif st == "rois":
         import h5py
         with h5py.File(path, "r") as f:
@@ -72,7 +73,7 @@ def ensure_run(backend, scan, rois=None, force=False, detectors=None):
                 x = backend.load_scan(scan, rois={}).param
             x = None if x is None else np.asarray(x, float)
         store.set_param(path, x, ptag)
-    return dict(scan=scan, path=str(path), did=did)
+    return dict(scan=scan, path=str(path), did=did, warnings=warnings)
 
 
 def _ensure_one(cls, cfg, scan, rois, force, detectors):
@@ -113,6 +114,8 @@ def watch(backend, runs, get_rois, detectors=None, workers=None, every=30.0, qui
                 if info["did"] != "cached":
                     print(f"run {s}: {info['did']:<6} ({time.time() - t0:.0f} s)  {time.strftime('%H:%M:%S')}",
                           flush=True)
+                for w in info.get("warnings", []):
+                    print(f"run {s}: {w}", flush=True)
             if cycles is None or n < cycles:
                 time.sleep(every)
     except KeyboardInterrupt:
@@ -171,6 +174,8 @@ def main(argv=None):
             print(f"run {s}: {type(info).__name__}: {info}", flush=True)
         else:
             print(f"run {s}: {info['did']:<6} {info['path']}  ({time.time() - t0:.0f} s)", flush=True)
+            for w in info.get("warnings", []):
+                print(f"run {s}: {w}", flush=True)
     print(json.dumps(dict(runs=len(runs), failed=n_bad, seconds=round(time.time() - t0, 1))))
     return 1 if n_bad else 0
 
