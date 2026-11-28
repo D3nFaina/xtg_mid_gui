@@ -118,3 +118,24 @@ def test_fit_page_reads_saved_file_and_compare(app, tmp_path):
     y, e, k = normalise_trace([0, 1], [1, 2], [0.1, 0.1], 2, (5, 6))
     assert np.isnan(y).all()
     w.close()
+
+
+def test_hidden_trace_hides_its_error_bars():
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pg = pytest.importorskip("pyqtgraph")
+    from pyqtgraph.Qt import QtWidgets
+    from xtg_mid_gui.gui import XTGMidWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841
+    w = XTGMidWindow(sim_kw=dict(n_shots=10))
+    w.load([101, 102, 103])
+    cp = w.fit_page.compare
+    assert cp.add_current() == 1
+    for plot in (cp.plot, w.fit_page.p_fit):
+        curves = [c for c in plot.listDataItems() if getattr(c, "_eb", None) is not None]
+        assert curves
+        curves[0].setVisible(False)                                   # = click on its legend entry
+        assert not curves[0]._eb.isVisible()
+        curves[0].setVisible(True)
+        assert curves[0]._eb.isVisible()
+    w.close()

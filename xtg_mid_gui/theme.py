@@ -200,3 +200,10 @@ def error_bars(t, y, e, color, alpha=230, width=1.5):
     beam = min(0.4 * gap, 0.015 * span) if span > 0 else 0.0
     return pg.ErrorBarItem(x=t, y=y, height=2 * np.nan_to_num(e), beam=beam,
                            pen=pg.mkPen(tuple(color[:3]) + (alpha,), width=width))
+
+
+def link_error_bars(curve, eb):
+    """Hide / show the error bars with their curve (legend click)."""
+    curve._eb = eb
+    curve.visibleChanged.connect(lambda: eb.setVisible(curve.isVisible()))
+    return curve
